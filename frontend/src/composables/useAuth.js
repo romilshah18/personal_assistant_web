@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 
 const API_BASE = process.env.NODE_ENV === 'production' 
-  ? 'https://your-backend-domain.com' 
+  ? 'https://personalassistantweb-production.up.railway.app' 
   : 'http://localhost:3001'
 
 // Global auth state
