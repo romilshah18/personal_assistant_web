@@ -103,6 +103,21 @@
       </div>
     </div>
 
+    <!-- Install Prompt Banner -->
+    <div v-if="showInstallPrompt && !isInstalled" class="install-banner">
+      <div class="install-content">
+        <div class="install-icon">📱</div>
+        <div class="install-text">
+          <h3>Install Personal Assistant</h3>
+          <p>Add to home screen for better experience</p>
+        </div>
+        <div class="install-actions">
+          <button class="install-button" @click="installApp">Install</button>
+          <button class="dismiss-button" @click="hideInstallPrompt">✕</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Bottom Actions -->
     <div class="bottom-actions">
       <button class="action-button" @click="$router.push('/history')">
@@ -110,6 +125,12 @@
           <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
         </svg>
         History
+      </button>
+      <button v-if="!isInstalled && !showInstallPrompt && isInstallable" class="action-button install-action" @click="installApp">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+        </svg>
+        Install App
       </button>
       <button class="action-button" @click="clearConversation" v-if="transcription || assistantResponse">
         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -146,6 +167,7 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAudioService } from '../composables/useAudioService'
+import { usePWAInstall } from '../composables/usePWAInstall'
 
 export default {
   name: 'MicScreen',
@@ -166,6 +188,15 @@ export default {
       requestPermission: requestAudioPermission,
       clearConversation
     } = useAudioService()
+
+    const {
+      isInstallable,
+      isInstalled,
+      showInstallPrompt,
+      installApp,
+      hideInstallPrompt,
+      init: initPWA
+    } = usePWAInstall()
 
     // Update time
     const updateTime = () => {
@@ -196,6 +227,9 @@ export default {
       updateTime()
       timeInterval = setInterval(updateTime, 1000)
       
+      // Initialize PWA install functionality
+      initPWA()
+      
       // Check if permission is needed
       if (!hasPermission.value && !permissionDenied.value) {
         showPermissionModal.value = true
@@ -222,7 +256,12 @@ export default {
       requestPermission,
       closePermissionModal,
       clearConversation,
-      goToSettings
+      goToSettings,
+      isInstallable,
+      isInstalled,
+      showInstallPrompt,
+      installApp,
+      hideInstallPrompt
     }
   }
 }
@@ -544,6 +583,110 @@ export default {
 .action-button svg {
   width: 18px;
   height: 18px;
+}
+
+.install-action {
+  background: rgba(46, 213, 115, 0.2);
+  border: 1px solid rgba(46, 213, 115, 0.3);
+}
+
+.install-action:hover {
+  background: rgba(46, 213, 115, 0.3);
+}
+
+.install-banner {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  right: 20px;
+  z-index: 100;
+  animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-100px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.install-content {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px);
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  color: #333;
+}
+
+.install-icon {
+  font-size: 24px;
+}
+
+.install-text {
+  flex: 1;
+}
+
+.install-text h3 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.install-text p {
+  margin: 0;
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.install-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.install-button {
+  padding: 8px 16px;
+  background: #4A90E2;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.install-button:hover {
+  background: #357abd;
+  transform: translateY(-1px);
+}
+
+.dismiss-button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 50%;
+  color: #666;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.3s ease;
+}
+
+.dismiss-button:hover {
+  background: rgba(0, 0, 0, 0.2);
 }
 
 .modal-overlay {

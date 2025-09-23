@@ -37,6 +37,9 @@ CREATE TABLE IF NOT EXISTS public.realtime_sessions (
   model TEXT NOT NULL DEFAULT 'gpt-4o-realtime-preview',
   voice TEXT NOT NULL DEFAULT 'verse',
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'failed', 'expired')),
+  current_mode TEXT CHECK (current_mode IN ('email', 'calendar', 'todo', 'learning', 'relax')), -- Current domain/mode
+  selected_account_email TEXT, -- Currently selected Google account email
+  active_tools TEXT[] DEFAULT ARRAY[]::TEXT[], -- Currently active tool names
   started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   ended_at TIMESTAMP WITH TIME ZONE,
   duration_seconds INTEGER,

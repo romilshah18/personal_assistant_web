@@ -126,6 +126,7 @@ export function useAudioService() {
           'Authorization': `Bearer ${session.client_secret.value}`,
           'Content-Type': 'application/sdp',
         },
+
       })
       
       if (!response.ok) {
@@ -156,12 +157,18 @@ export function useAudioService() {
     
     try {
       const timestamp = sessionStartTime ? Date.now() - sessionStartTime : 0
+      const authToken = localStorage.getItem('auth_token')
+      const headers = {
+        'Content-Type': 'application/json'
+      }
+      
+      if (authToken) {
+        headers.Authorization = `Bearer ${authToken}`
+      }
       
       await fetch(`${BACKEND_URL}/api/realtime/session/${currentSession.session_id}/message`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           message_type: messageType,
           content,
@@ -178,10 +185,112 @@ export function useAudioService() {
     }
   }
 
+  // Handle tool call execution
+  const handleToolCall = async (toolCall) => {
+    try {
+      console.log('Executing tool call:', toolCall)
+      
+      // Forward tool call to backend
+      const authToken = localStorage.getItem('auth_token')
+      const headers = {
+        'Content-Type': 'application/json'
+      }
+      
+      if (authToken) {
+        headers.Authorization = `Bearer ${authToken}`
+      }
+      
+      const response = await fetch(`${BACKEND_URL}/api/tools/${toolCall.name}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          ...toolCall.arguments,
+          openai_session_id: currentSession?.openai_session_id || currentSession?.id // Use OpenAI session ID
+        })
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Tool execution failed')
+      }
+      
+      const result = await response.json()
+      
+      // Check if we need to update the session with new tools
+      if (result.update_session && result.tools && dataChannel && dataChannel.readyState === 'open') {
+        console.log('Updating WebRTC session with new tools:', result.tools)
+        
+        // Send session.update event via data channel
+        dataChannel.send(JSON.stringify({
+          type: 'session.update',
+          session: {
+            tools: result.tools
+          }
+        }))
+      }
+      
+      // Send tool result back to OpenAI via data channel
+      if (dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'function_call_output',
+            call_id: toolCall.id,
+            output: JSON.stringify(result)
+          }
+        }))
+        
+        // Trigger response generation after tool result
+        setTimeout(() => {
+          dataChannel.send(JSON.stringify({
+            type: 'response.create',
+            response: {
+              modalities: ['text', 'audio']
+            }
+          }))
+        }, 100)
+      }
+      
+      console.log('Tool call completed:', result)
+      return result
+    } catch (error) {
+      console.error('Tool call error:', error)
+      
+      // Send error back to OpenAI via data channel
+      if (dataChannel && dataChannel.readyState === 'open') {
+        dataChannel.send(JSON.stringify({
+          type: 'conversation.item.create',
+          item: {
+            type: 'function_call_output',
+            call_id: toolCall.id,
+            output: JSON.stringify({
+              success: false,
+              error: error.message
+            })
+          }
+        }))
+        
+        // Trigger response generation after error
+        setTimeout(() => {
+          dataChannel.send(JSON.stringify({
+            type: 'response.create',
+            response: {
+              modalities: ['text', 'audio']
+            }
+          }))
+        }, 100)
+      }
+      
+      // Store error message
+      storeMessage('system', `Tool error: ${error.message}`)
+      return { success: false, error: error.message }
+    }
+  }
+
   // Handle realtime events from data channel
   const handleRealtimeEvent = (event) => {
     console.log('Realtime event:', event)
-    
+    console.log('Event type:', event.type)
     switch (event.type) {
       case 'conversation.item.input_audio_transcription.completed':
         if (event.transcript) {
@@ -196,6 +305,22 @@ export function useAudioService() {
           assistantResponse.value += event.delta
         }
         break
+        
+      case 'response.function_call_arguments.done': {
+        // Handle tool call from assistant
+        isProcessing.value = true
+        
+        // Format the tool call data to match expected structure
+        const toolCall = {
+          id: event.call_id,
+          name: event.name,
+          arguments: JSON.parse(event.arguments)
+        }
+        
+        console.log('Tool call detected:', toolCall)
+        handleToolCall(toolCall)
+        break
+      }
         
       case 'response.done':
         isProcessing.value = false
@@ -261,12 +386,18 @@ export function useAudioService() {
     
     try {
       const duration = sessionStartTime ? Math.floor((Date.now() - sessionStartTime) / 1000) : null
+      const authToken = localStorage.getItem('auth_token')
+      const headers = {
+        'Content-Type': 'application/json'
+      }
+      
+      if (authToken) {
+        headers.Authorization = `Bearer ${authToken}`
+      }
       
       await fetch(`${BACKEND_URL}/api/realtime/session/${currentSession.session_id}`, {
         method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify({
           status,
           error_message: errorMessage,

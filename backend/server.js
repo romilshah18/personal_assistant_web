@@ -12,6 +12,194 @@ require('dotenv').config();
 const app = express();
 const port = process.env.PORT || 3001;
 
+// Tool definitions for dynamic registration
+const TOOL_DEFINITIONS = {
+  // Meta tools - always available at session start
+  meta: {
+    set_mode: {
+      type: "function",
+      name: "set_mode",
+      description: "Switch between domains (email, calendar, todo, learning, relax). This will load relevant tools for that domain.",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { 
+            type: "string", 
+            enum: ["email", "calendar", "todo", "learning", "relax"],
+            description: "The domain to switch to" 
+          }
+        },
+        required: ["mode"]
+      }
+    },
+    select_account: {
+      type: "function",
+      name: "select_account",
+      description: "Select which Google account to use for operations. Call this when user mentions a specific email or wants to switch accounts.",
+      parameters: {
+        type: "object",
+        properties: {
+          email: { 
+            type: "string",
+            description: "Email address of the account to select" 
+          }
+        },
+        required: ["email"]
+      }
+    }
+  },
+  
+  // Domain-specific tools
+  email: {
+    email_actions: {
+      type: "function",
+      name: "email_actions",
+      description: "Manage emails (search, get content, draft, send). Use this for all email-related operations.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { 
+            type: "string", 
+            enum: ["search", "get", "draft", "send", "summary"],
+            description: "The email action to perform"
+          },
+          args: { 
+            type: "object",
+            description: "Action-specific arguments"
+          }
+        },
+        required: ["action"]
+      }
+    }
+  },
+  
+  calendar: {
+    calendar_actions: {
+      type: "function",
+      name: "calendar_actions", 
+      description: "Manage calendar events (list, create, update, delete). Use this for all calendar-related operations.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { 
+            type: "string", 
+            enum: ["list", "create", "update", "delete"],
+            description: "The calendar action to perform"
+          },
+          args: { 
+            type: "object",
+            description: "Action-specific arguments"
+          }
+        },
+        required: ["action"]
+      }
+    }
+  },
+  
+  todo: {
+    todo_actions: {
+      type: "function",
+      name: "todo_actions",
+      description: "Manage todo items and tasks. Use this for task management operations.",
+      parameters: {
+        type: "object", 
+        properties: {
+          action: { 
+            type: "string", 
+            enum: ["list", "create", "update", "delete", "complete"],
+            description: "The todo action to perform"
+          },
+          args: { 
+            type: "object",
+            description: "Action-specific arguments"
+          }
+        },
+        required: ["action"]
+      }
+    }
+  },
+  
+  learning: {
+    learning_actions: {
+      type: "function",
+      name: "learning_actions",
+      description: "Educational and learning tools (research, summarize, explain). Use this for learning-related operations.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { 
+            type: "string", 
+            enum: ["research", "summarize", "explain", "quiz"],
+            description: "The learning action to perform"
+          },
+          args: { 
+            type: "object",
+            description: "Action-specific arguments"
+          }
+        },
+        required: ["action"]
+      }
+    }
+  },
+  
+  relax: {
+    relax_actions: {
+      type: "function",
+      name: "relax_actions",
+      description: "Relaxation and entertainment tools (music, meditation, jokes). Use this for relaxation activities.",
+      parameters: {
+        type: "object",
+        properties: {
+          action: { 
+            type: "string", 
+            enum: ["music", "meditation", "joke", "story"],
+            description: "The relaxation action to perform"
+          },
+          args: { 
+            type: "object",
+            description: "Action-specific arguments"
+          }
+        },
+        required: ["action"]
+      }
+    }
+  }
+};
+
+// Helper function to get tools for a specific mode with account context
+const getToolsForMode = async (mode, userId = null) => {
+  const tools = [];
+  
+  // Always include meta tools
+  tools.push(...Object.values(TOOL_DEFINITIONS.meta));
+  
+  // Add domain-specific tools if mode is specified
+  if (mode && TOOL_DEFINITIONS[mode]) {
+    // Check if user has required accounts for this mode
+    if ((mode === 'email' || mode === 'calendar') && userId) {
+      const { data: accounts } = await supabase
+        .from('google_accounts')
+        .select('email')
+        .eq('user_id', userId);
+      
+      if (accounts && accounts.length > 0) {
+        tools.push(...Object.values(TOOL_DEFINITIONS[mode]));
+        
+        // Update account selection tool description to include available accounts
+        const selectAccountTool = tools.find(t => t.name === 'select_account');
+        if (selectAccountTool) {
+          selectAccountTool.description += ` Available accounts: ${accounts.map(a => a.email).join(', ')}`;
+        }
+      }
+    } else {
+      // For non-account dependent modes, just add the tools
+      tools.push(...Object.values(TOOL_DEFINITIONS[mode]));
+    }
+  }
+  
+  return tools;
+};
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -77,6 +265,10 @@ app.post('/api/realtime/session', optionalAuth, async (req, res) => {
     
     console.log('Creating ephemeral token for OpenAI Realtime API...');
     
+    // Get initial tools (meta tools only)
+    const initialTools = await getToolsForMode(null, req.user?.id);
+    const toolNames = initialTools.map(tool => tool.name);
+    
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
       method: 'POST',
       headers: {
@@ -85,7 +277,8 @@ app.post('/api/realtime/session', optionalAuth, async (req, res) => {
       },
       body: JSON.stringify({
         model,
-        voice
+        voice,
+        tools: initialTools
       }),
     });
 
@@ -99,7 +292,7 @@ app.post('/api/realtime/session', optionalAuth, async (req, res) => {
     }
 
     const openaiData = await response.json();
-    console.log('Successfully created ephemeral token');
+    console.log('Successfully created ephemeral token with initial tools:', toolNames);
     
     // Store session in database
     const { data: sessionData, error: sessionError } = await supabase
@@ -111,6 +304,9 @@ app.post('/api/realtime/session', optionalAuth, async (req, res) => {
         model,
         voice,
         status: 'active',
+        current_mode: null, // No mode selected initially
+        selected_account_email: null, // No account selected initially
+        active_tools: toolNames, // Store active tool names
         metadata: {
           expires_at: openaiData.client_secret?.expires_at,
           openai_response: openaiData // Store full OpenAI response for reference
@@ -128,7 +324,8 @@ app.post('/api/realtime/session', optionalAuth, async (req, res) => {
     // Return OpenAI data plus our session ID
     res.json({
       ...openaiData,
-      session_id: sessionData?.id // Our internal session ID
+      session_id: sessionData?.id, // Our internal session ID
+      active_tools: toolNames // Return active tools for frontend
     });
   } catch (error) {
     console.error('Error creating OpenAI session:', error);
@@ -140,6 +337,63 @@ app.post('/api/realtime/session', optionalAuth, async (req, res) => {
 });
 
 // Session Management Endpoints
+
+// Get tools for a specific mode (for frontend to update session via WebRTC)
+app.post('/api/realtime/get-tools', optionalAuth, async (req, res) => {
+  try {
+    const { mode, openai_session_id } = req.body;
+    
+    if (!mode) {
+      return res.status(400).json({ error: 'Mode is required' });
+    }
+
+    // Get new tools for the specified mode
+    const newTools = await getToolsForMode(mode, req.user?.id);
+    const toolNames = newTools.map(tool => tool.name);
+    
+    console.log(`Getting tools for mode: ${mode}`);
+    console.log('Tools:', toolNames);
+
+    // Update our database record if session ID provided
+    if (openai_session_id) {
+      const updateData = {
+        current_mode: mode,
+        active_tools: toolNames,
+        updated_at: new Date().toISOString()
+      };
+
+      // First check if session exists and update user_id if needed
+      const { data: existingSession } = await supabase
+        .from('realtime_sessions')
+        .select('user_id')
+        .eq('openai_session_id', openai_session_id)
+        .single();
+
+      // If session has no user_id and user is authenticated, set it
+      if (existingSession && !existingSession.user_id && req.user?.id) {
+        updateData.user_id = req.user.id;
+      }
+
+      await supabase
+        .from('realtime_sessions')
+        .update(updateData)
+        .eq('openai_session_id', openai_session_id);
+    }
+    
+    res.json({
+      success: true,
+      mode,
+      tools: newTools,
+      active_tools: toolNames
+    });
+  } catch (error) {
+    console.error('Error getting tools for mode:', error);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      message: error.message
+    });
+  }
+});
 
 // Update session status (complete, failed, etc.)
 app.patch('/api/realtime/session/:sessionId', optionalAuth, async (req, res) => {
@@ -313,7 +567,7 @@ app.post('/api/realtime/session/:sessionId/message', optionalAuth, async (req, r
       .from('realtime_sessions')
       .select('id')
       .eq('id', sessionId)
-      .eq('user_id', req.user?.id || null)
+      // .eq('user_id', req.user?.id || null)
       .single();
 
     if (sessionError || !session) {
@@ -382,6 +636,604 @@ app.delete('/api/realtime/session/:sessionId', optionalAuth, async (req, res) =>
   } catch (error) {
     console.error('Error deleting session:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Tool Call Handling Endpoints
+
+// Handle set_mode tool call
+app.post('/api/tools/set_mode', optionalAuth, async (req, res) => {
+  try {
+    const { mode, openai_session_id } = req.body;
+    
+    if (!mode) {
+      return res.status(400).json({ error: 'Mode is required' });
+    }
+
+    // Validate mode
+    const validModes = ['email', 'calendar', 'todo', 'learning', 'relax'];
+    if (!validModes.includes(mode)) {
+      return res.status(400).json({ error: 'Invalid mode' });
+    }
+
+    // Get tools for this mode
+    const newTools = await getToolsForMode(mode, req.user?.id);
+    const toolNames = newTools.map(tool => tool.name);
+    
+    // Update our database record if session ID provided
+    if (openai_session_id) {
+      const updateData = {
+        current_mode: mode,
+        active_tools: toolNames,
+        updated_at: new Date().toISOString()
+      };
+
+      await supabase
+        .from('realtime_sessions')
+        .update(updateData)
+        .eq('openai_session_id', openai_session_id)
+        .eq('user_id', req.user?.id || null);
+    }
+    
+    res.json({
+      success: true,
+      message: `Switched to ${mode} mode. Frontend should update session with ${toolNames.length} tools.`,
+      mode,
+      tools: newTools,
+      active_tools: toolNames,
+      // Signal to frontend to update WebRTC session
+      update_session: true
+    });
+  } catch (error) {
+    console.error('Error handling set_mode:', error);
+    res.status(500).json({ 
+      error: 'Failed to switch mode',
+      message: error.message
+    });
+  }
+});
+
+// Handle select_account tool call
+app.post('/api/tools/select_account', optionalAuth, async (req, res) => {
+  try {
+    const { email, openai_session_id } = req.body;
+    
+    if (!email || !openai_session_id) {
+      return res.status(400).json({ error: 'Email and OpenAI session ID are required' });
+    }
+
+    if (!req.user) {
+      return res.status(401).json({ error: 'Authentication required to select account' });
+    }
+
+    // Verify the user has access to this Google account
+    const { data: account, error: accountError } = await supabase
+      .from('google_accounts')
+      .select('email, name')
+      .eq('user_id', req.user.id)
+      .eq('email', email)
+      .single();
+
+    if (accountError || !account) {
+      return res.status(404).json({ error: 'Google account not found or not connected' });
+    }
+
+    // First, let's check if the session exists and get its current user_id
+    const { data: existingSession } = await supabase
+      .from('realtime_sessions')
+      .select('user_id, current_mode')
+      .eq('openai_session_id', openai_session_id)
+      .single();
+
+    console.log('Found session:', existingSession);
+
+    // Update session with selected account and user_id if not set
+    const updateData = { 
+      selected_account_email: email,
+      updated_at: new Date().toISOString()
+    };
+
+    // If session has no user_id, set it to current user
+    if (!existingSession?.user_id) {
+      updateData.user_id = req.user.id;
+    }
+
+    const { data: session, error: sessionError } = await supabase
+      .from('realtime_sessions')
+      .update(updateData)
+      .eq('openai_session_id', openai_session_id)
+      .select('current_mode')
+      .single();
+
+    if (sessionError) {
+      console.error('Error updating session:', sessionError);
+      return res.status(500).json({ error: 'Failed to update session' });
+    }
+
+    // If we're in email or calendar mode, refresh tools to include account context
+    if (session?.current_mode && ['email', 'calendar'].includes(session.current_mode)) {
+      await fetch(`${req.protocol}://${req.get('host')}/api/realtime/update-tools`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': req.headers.authorization
+        },
+        body: JSON.stringify({
+          openai_session_id,
+          mode: session.current_mode,
+          selected_account_email: email
+        })
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: `Selected account: ${account.name || email}`,
+      selected_account: {
+        email: account.email,
+        name: account.name
+      }
+    });
+  } catch (error) {
+    console.error('Error handling select_account:', error);
+    res.status(500).json({ 
+      error: 'Failed to select account',
+      message: error.message
+    });
+  }
+});
+
+// Handle email_actions tool call
+app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
+  try {
+    const { action, args, openai_session_id } = req.body;
+    
+    if (!action || !openai_session_id) {
+      return res.status(400).json({ error: 'Action and OpenAI session ID are required' });
+    }
+
+    // Get session to check selected account
+    const { data: session, error: sessionError } = await supabase
+      .from('realtime_sessions')
+      .select('selected_account_email')
+      .eq('openai_session_id', openai_session_id)
+      // .eq('user_id', req.user.id)
+      .single();
+
+    if (sessionError || !session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    if (!session.selected_account_email) {
+      // Get available accounts to suggest to user
+      const { data: accounts } = await supabase
+        .from('google_accounts')
+        .select('email, name')
+        .eq('user_id', req.user.id);
+      
+      const accountList = accounts?.map(a => a.email).join(', ') || 'none';
+      
+      return res.status(400).json({ 
+        error: 'No Google account selected for email operations.',
+        message: `Please specify which email account to use. Available accounts: ${accountList}. Say "use [email]" to select an account.`,
+        action: 'select_account_required',
+        available_accounts: accounts || []
+      });
+    }
+
+    // Get the Google account credentials
+    const { data: account, error: accountError } = await supabase
+      .from('google_accounts')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .eq('email', session.selected_account_email)
+      .single();
+
+    if (accountError || !account) {
+      return res.status(404).json({ error: 'Selected Google account not found' });
+    }
+
+    // Set up OAuth client for this account
+    const accountOAuth = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+    accountOAuth.setCredentials({
+      access_token: account.access_token,
+      refresh_token: account.refresh_token
+    });
+
+    const gmail = google.gmail({ version: 'v1', auth: accountOAuth });
+    
+    switch (action) {
+      case 'search':
+        const searchQuery = args?.query || 'in:inbox';
+        const maxResults = args?.maxResults || 10;
+        
+        const searchResponse = await gmail.users.messages.list({
+          userId: 'me',
+          q: searchQuery,
+          maxResults
+        });
+        
+        res.json({
+          success: true,
+          action: 'search',
+          query: searchQuery,
+          messages: searchResponse.data.messages || [],
+          resultSizeEstimate: searchResponse.data.resultSizeEstimate
+        });
+        break;
+        
+      case 'get':
+        if (!args?.messageId) {
+          return res.status(400).json({ error: 'Message ID required for get action' });
+        }
+        
+        const getMessage = await gmail.users.messages.get({
+          userId: 'me',
+          id: args.messageId
+        });
+        
+        res.json({
+          success: true,
+          action: 'get',
+          message: getMessage.data
+        });
+        break;
+        
+      case 'draft':
+        // Create email draft
+        const draftData = {
+          message: {
+            raw: Buffer.from(
+              `To: ${args?.to || ''}\r\n` +
+              `Subject: ${args?.subject || ''}\r\n\r\n` +
+              `${args?.body || ''}`
+            ).toString('base64')
+          }
+        };
+        
+        const draft = await gmail.users.drafts.create({
+          userId: 'me',
+          resource: draftData
+        });
+        
+        res.json({
+          success: true,
+          action: 'draft',
+          draft: draft.data
+        });
+        break;
+        
+      case 'send':
+        // Send email
+        const sendData = {
+          raw: Buffer.from(
+            `To: ${args?.to || ''}\r\n` +
+            `Subject: ${args?.subject || ''}\r\n\r\n` +
+            `${args?.body || ''}`
+          ).toString('base64')
+        };
+        
+        const sent = await gmail.users.messages.send({
+          userId: 'me',
+          resource: sendData
+        });
+        
+        res.json({
+          success: true,
+          action: 'send',
+          message: sent.data
+        });
+        break;
+        
+      case 'summary':
+        // Get email summary based on filters
+        const summaryQuery = args?.query || 'in:inbox';
+        const summaryMaxResults = args?.maxResults || 20;
+        const timeRange = args?.timeRange || 'week'; // day, week, month
+        
+        // Add time filter to query
+        let timeFilter = '';
+        const now = new Date();
+        switch (timeRange) {
+          case 'day':
+            const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+            timeFilter = `after:${Math.floor(yesterday.getTime() / 1000)}`;
+            break;
+          case 'week':
+            const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+            timeFilter = `after:${Math.floor(weekAgo.getTime() / 1000)}`;
+            break;
+          case 'month':
+            const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+            timeFilter = `after:${Math.floor(monthAgo.getTime() / 1000)}`;
+            break;
+        }
+        
+        const finalQuery = timeFilter ? `${summaryQuery} ${timeFilter}` : summaryQuery;
+        
+        // Search for emails
+        const summarySearchResponse = await gmail.users.messages.list({
+          userId: 'me',
+          q: finalQuery,
+          maxResults: summaryMaxResults
+        });
+        
+        if (!summarySearchResponse.data.messages || summarySearchResponse.data.messages.length === 0) {
+          return res.json({
+            success: true,
+            action: 'summary',
+            summary: {
+              totalEmails: 0,
+              timeRange,
+              query: finalQuery,
+              message: 'No emails found matching the criteria.'
+            }
+          });
+        }
+        
+        // Get details for each email (in batches to avoid rate limits)
+        const emailDetails = [];
+        const batchSize = 10;
+        
+        for (let i = 0; i < Math.min(summarySearchResponse.data.messages.length, batchSize); i++) {
+          const messageId = summarySearchResponse.data.messages[i].id;
+          try {
+            const emailDetail = await gmail.users.messages.get({
+              userId: 'me',
+              id: messageId,
+              format: 'metadata',
+              metadataHeaders: ['From', 'To', 'Subject', 'Date']
+            });
+            
+            const headers = emailDetail.data.payload.headers;
+            const from = headers.find(h => h.name === 'From')?.value || 'Unknown';
+            const subject = headers.find(h => h.name === 'Subject')?.value || 'No Subject';
+            const date = headers.find(h => h.name === 'Date')?.value || 'Unknown Date';
+            
+            emailDetails.push({
+              id: messageId,
+              from,
+              subject,
+              date,
+              snippet: emailDetail.data.snippet || ''
+            });
+          } catch (emailError) {
+            console.error(`Error fetching email ${messageId}:`, emailError);
+          }
+        }
+        
+        // Analyze emails for summary
+        const senders = {};
+        const subjects = [];
+        let totalEmails = summarySearchResponse.data.resultSizeEstimate || 0;
+        
+        emailDetails.forEach(email => {
+          // Count emails by sender
+          const senderEmail = email.from.match(/<(.+)>/) ? email.from.match(/<(.+)>/)[1] : email.from;
+          senders[senderEmail] = (senders[senderEmail] || 0) + 1;
+          
+          // Collect subjects
+          subjects.push(email.subject);
+        });
+        
+        // Get top senders
+        const topSenders = Object.entries(senders)
+          .sort(([,a], [,b]) => b - a)
+          .slice(0, 5)
+          .map(([email, count]) => ({ email, count }));
+        
+        // Generate summary
+        const summary = {
+          totalEmails,
+          analyzedEmails: emailDetails.length,
+          timeRange,
+          query: finalQuery,
+          topSenders,
+          recentEmails: emailDetails.slice(0, 5).map(email => ({
+            from: email.from,
+            subject: email.subject,
+            date: email.date,
+            snippet: email.snippet.substring(0, 100) + '...'
+          })),
+          insights: {
+            mostActiveDay: timeRange,
+            averageEmailsPerDay: Math.round(totalEmails / (timeRange === 'day' ? 1 : timeRange === 'week' ? 7 : 30)),
+            hasUnread: summaryQuery.includes('is:unread') || false
+          }
+        };
+        
+        res.json({
+          success: true,
+          action: 'summary',
+          summary
+        });
+        break;
+        
+      default:
+        return res.status(400).json({ error: 'Unknown email action' });
+    }
+  } catch (error) {
+    console.error('Error handling email_actions:', error);
+    res.status(500).json({ 
+      error: 'Email action failed',
+      message: error.message
+    });
+  }
+});
+
+// Handle calendar_actions tool call
+app.post('/api/tools/calendar_actions', authenticateUser, async (req, res) => {
+  try {
+    const { action, args, openai_session_id } = req.body;
+    
+    if (!action || !openai_session_id) {
+      return res.status(400).json({ error: 'Action and OpenAI session ID are required' });
+    }
+
+    // Get session to check selected account
+    const { data: session, error: sessionError } = await supabase
+      .from('realtime_sessions')
+      .select('selected_account_email')
+      .eq('openai_session_id', openai_session_id)
+      // .eq('user_id', req.user.id) // Commented out temporarily for debugging
+      .single();
+
+    if (sessionError || !session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    if (!session.selected_account_email) {
+      // Get available accounts to suggest to user
+      const { data: accounts } = await supabase
+        .from('google_accounts')
+        .select('email, name')
+        .eq('user_id', req.user.id);
+      
+      const accountList = accounts?.map(a => a.email).join(', ') || 'none';
+      
+      return res.status(400).json({ 
+        error: 'No Google account selected for calendar operations.',
+        message: `Please specify which email account to use. Available accounts: ${accountList}. Say "use [email]" to select an account.`,
+        action: 'select_account_required',
+        available_accounts: accounts || []
+      });
+    }
+
+    // Get the Google account credentials
+    const { data: account, error: accountError } = await supabase
+      .from('google_accounts')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .eq('email', session.selected_account_email)
+      .single();
+
+    if (accountError || !account) {
+      return res.status(404).json({ error: 'Selected Google account not found' });
+    }
+
+    // Set up OAuth client for this account
+    const accountOAuth = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI
+    );
+    accountOAuth.setCredentials({
+      access_token: account.access_token,
+      refresh_token: account.refresh_token
+    });
+
+    const calendar = google.calendar({ version: 'v3', auth: accountOAuth });
+    
+    switch (action) {
+      case 'list':
+        const timeMin = args?.timeMin || new Date().toISOString();
+        const maxResults = args?.maxResults || 10;
+        
+        const events = await calendar.events.list({
+          calendarId: 'primary',
+          timeMin,
+          maxResults,
+          singleEvents: true,
+          orderBy: 'startTime'
+        });
+        
+        res.json({
+          success: true,
+          action: 'list',
+          events: events.data.items || []
+        });
+        break;
+        
+      case 'create':
+        if (!args?.description) {
+          return res.status(400).json({ error: 'Event summary required for create action' });
+        }
+        
+        const eventData = {
+          summary: args?.description,
+          description: args.description || '',
+          start: {
+            dateTime: args.startTime || new Date().toISOString(),
+            timeZone: args.timeZone || 'UTC'
+          },
+          end: {
+            dateTime: args.endTime || new Date(Date.now() + 3600000).toISOString(), // +1 hour
+            timeZone: args.timeZone || 'UTC'
+          }
+        };
+        
+        const createdEvent = await calendar.events.insert({
+          calendarId: 'primary',
+          resource: eventData
+        });
+        
+        res.json({
+          success: true,
+          action: 'create',
+          event: createdEvent.data
+        });
+        break;
+        
+      default:
+        return res.status(400).json({ error: 'Unknown calendar action' });
+    }
+  } catch (error) {
+    console.error('Error handling calendar_actions:', error);
+    res.status(500).json({ 
+      error: 'Calendar action failed',
+      message: error.message
+    });
+  }
+});
+
+// Handle other tool actions (todo, learning, relax)
+app.post('/api/tools/:toolName', optionalAuth, async (req, res) => {
+  try {
+    const { toolName } = req.params;
+    const { action, args } = req.body;
+    
+    // For now, implement basic responses for non-Google tools
+    switch (toolName) {
+      case 'todo_actions':
+        res.json({
+          success: true,
+          action,
+          message: `Todo ${action} action received`,
+          data: args
+        });
+        break;
+        
+      case 'learning_actions':
+        res.json({
+          success: true,
+          action,
+          message: `Learning ${action} action received`,
+          data: args
+        });
+        break;
+        
+      case 'relax_actions':
+        res.json({
+          success: true,
+          action,
+          message: `Relax ${action} action received`,
+          data: args
+        });
+        break;
+        
+      default:
+        return res.status(404).json({ error: 'Unknown tool' });
+    }
+  } catch (error) {
+    console.error(`Error handling ${req.params.toolName}:`, error);
+    res.status(500).json({ 
+      error: 'Tool action failed',
+      message: error.message
+    });
   }
 });
 
