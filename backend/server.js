@@ -23,7 +23,7 @@ const limiter = rateLimit({
 app.use(limiter);
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://your-domain.com'] 
+    ? [process.env.FRONTEND_URL || 'https://your-frontend-domain.com'] 
     : [
         'http://localhost:8080', 
         'https://localhost:8080',
@@ -46,7 +46,7 @@ const oauth2Client = new google.auth.OAuth2(
 const server = http.createServer(app);
 
 // Ephemeral token endpoint for OpenAI Realtime API
-app.post('/api/realtime/session', async (req, res) => {
+app.post('/api/realtime/session', optionalAuth, async (req, res) => {
   try {
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({ 
@@ -54,6 +54,8 @@ app.post('/api/realtime/session', async (req, res) => {
       });
     }
 
+    const { model = 'gpt-4o-realtime-preview', voice = 'verse' } = req.body;
+    
     console.log('Creating ephemeral token for OpenAI Realtime API...');
     
     const response = await fetch('https://api.openai.com/v1/realtime/sessions', {
@@ -63,8 +65,8 @@ app.post('/api/realtime/session', async (req, res) => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o-realtime-preview',
-        voice: 'verse'
+        model,
+        voice
       }),
     });
 
@@ -77,16 +79,290 @@ app.post('/api/realtime/session', async (req, res) => {
       });
     }
 
-    const data = await response.json();
+    const openaiData = await response.json();
     console.log('Successfully created ephemeral token');
     
-    res.json(data);
+    // Store session in database
+    const { data: sessionData, error: sessionError } = await supabase
+      .from('realtime_sessions')
+      .insert({
+        user_id: req.user?.id || null, // null for anonymous users
+        openai_session_id: openaiData.id, // Store OpenAI's session ID
+        session_token: openaiData.client_secret?.value || null,
+        model,
+        voice,
+        status: 'active',
+        metadata: {
+          expires_at: openaiData.client_secret?.expires_at,
+          openai_response: openaiData // Store full OpenAI response for reference
+        }
+      })
+      .select()
+      .single();
+
+    if (sessionError) {
+      console.error('Error storing session:', sessionError);
+      // Don't fail the request if we can't store the session
+      // Just log the error and continue
+    }
+
+    // Return OpenAI data plus our session ID
+    res.json({
+      ...openaiData,
+      session_id: sessionData?.id // Our internal session ID
+    });
   } catch (error) {
     console.error('Error creating OpenAI session:', error);
     res.status(500).json({ 
       error: 'Internal server error',
       message: error.message
     });
+  }
+});
+
+// Session Management Endpoints
+
+// Update session status (complete, failed, etc.)
+app.patch('/api/realtime/session/:sessionId', optionalAuth, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { status, error_message, duration_seconds, total_messages } = req.body;
+    
+    if (!sessionId) {
+      return res.status(400).json({ error: 'Session ID is required' });
+    }
+
+    const updateData = {
+      updated_at: new Date().toISOString()
+    };
+
+    if (status) updateData.status = status;
+    if (error_message) updateData.error_message = error_message;
+    if (duration_seconds !== undefined) updateData.duration_seconds = duration_seconds;
+    if (total_messages !== undefined) updateData.total_messages = total_messages;
+    
+    if (status === 'completed' || status === 'failed' || status === 'expired') {
+      updateData.ended_at = new Date().toISOString();
+    }
+
+    const { data, error } = await supabase
+      .from('realtime_sessions')
+      .update(updateData)
+      .eq('id', sessionId)
+      .eq('user_id', req.user?.id || null) // Ensure user can only update their own sessions
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error updating session:', error);
+      return res.status(500).json({ error: 'Failed to update session' });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    res.json({ session: data });
+  } catch (error) {
+    console.error('Error updating session:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get user's session history
+app.get('/api/realtime/sessions', optionalAuth, async (req, res) => {
+  try {
+    const { limit = 10, offset = 0, status } = req.query;
+    
+    let query = supabase
+      .from('realtime_sessions')
+      .select('*')
+      .eq('user_id', req.user?.id || null)
+      .order('started_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data: sessions, error } = await query;
+
+    if (error) {
+      console.error('Error fetching sessions:', error);
+      return res.status(500).json({ error: 'Failed to fetch sessions' });
+    }
+
+    res.json({ sessions });
+  } catch (error) {
+    console.error('Error fetching sessions:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get session by OpenAI session ID
+app.get('/api/realtime/session/openai/:openaiSessionId', optionalAuth, async (req, res) => {
+  try {
+    const { openaiSessionId } = req.params;
+    
+    // Get session by OpenAI session ID
+    const { data: session, error: sessionError } = await supabase
+      .from('realtime_sessions')
+      .select('*')
+      .eq('openai_session_id', openaiSessionId)
+      .eq('user_id', req.user?.id || null)
+      .single();
+
+    if (sessionError || !session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // Get conversation messages
+    const { data: messages, error: messagesError } = await supabase
+      .from('conversation_messages')
+      .select('*')
+      .eq('session_id', session.id)
+      .order('timestamp_ms', { ascending: true });
+
+    if (messagesError) {
+      console.error('Error fetching messages:', messagesError);
+      return res.status(500).json({ error: 'Failed to fetch conversation history' });
+    }
+
+    res.json({ 
+      session,
+      messages: messages || []
+    });
+  } catch (error) {
+    console.error('Error fetching session by OpenAI ID:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get specific session with conversation history
+app.get('/api/realtime/session/:sessionId', optionalAuth, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    // Get session
+    const { data: session, error: sessionError } = await supabase
+      .from('realtime_sessions')
+      .select('*')
+      .eq('id', sessionId)
+      .eq('user_id', req.user?.id || null)
+      .single();
+
+    if (sessionError || !session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // Get conversation messages
+    const { data: messages, error: messagesError } = await supabase
+      .from('conversation_messages')
+      .select('*')
+      .eq('session_id', sessionId)
+      .order('timestamp_ms', { ascending: true });
+
+    if (messagesError) {
+      console.error('Error fetching messages:', messagesError);
+      return res.status(500).json({ error: 'Failed to fetch conversation history' });
+    }
+
+    res.json({ 
+      session,
+      messages: messages || []
+    });
+  } catch (error) {
+    console.error('Error fetching session:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Store conversation message
+app.post('/api/realtime/session/:sessionId/message', optionalAuth, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const { message_type, content, audio_duration_ms, timestamp_ms, metadata } = req.body;
+    
+    if (!sessionId || !message_type || timestamp_ms === undefined) {
+      return res.status(400).json({ 
+        error: 'Session ID, message type, and timestamp are required' 
+      });
+    }
+
+    // Verify session belongs to user
+    const { data: session, error: sessionError } = await supabase
+      .from('realtime_sessions')
+      .select('id')
+      .eq('id', sessionId)
+      .eq('user_id', req.user?.id || null)
+      .single();
+
+    if (sessionError || !session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    // Insert message
+    const { data: message, error: messageError } = await supabase
+      .from('conversation_messages')
+      .insert({
+        session_id: sessionId,
+        message_type,
+        content,
+        audio_duration_ms,
+        timestamp_ms,
+        metadata: metadata || {}
+      })
+      .select()
+      .single();
+
+    if (messageError) {
+      console.error('Error storing message:', messageError);
+      return res.status(500).json({ error: 'Failed to store message' });
+    }
+
+    // Update session message count
+    await supabase
+      .from('realtime_sessions')
+      .update({ 
+        total_messages: supabase.rpc('increment_total_messages', { session_id: sessionId }),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', sessionId);
+
+    res.json({ message });
+  } catch (error) {
+    console.error('Error storing message:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Delete session and its messages
+app.delete('/api/realtime/session/:sessionId', optionalAuth, async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    // Delete session (messages will be deleted automatically due to CASCADE)
+    const { data, error } = await supabase
+      .from('realtime_sessions')
+      .delete()
+      .eq('id', sessionId)
+      .eq('user_id', req.user?.id || null)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Error deleting session:', error);
+      return res.status(500).json({ error: 'Failed to delete session' });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    res.json({ success: true, message: 'Session deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting session:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

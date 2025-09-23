@@ -1,7 +1,7 @@
 import { ref, reactive } from 'vue'
 
 const BACKEND_URL = process.env.NODE_ENV === 'production' 
-  ? 'https://your-domain.com' 
+  ? (process.env.VUE_APP_API_URL || 'https://your-backend-domain.com')
   : window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'http://localhost:3001'
     : `http://${window.location.hostname}:3001`
@@ -22,6 +22,8 @@ export function useAudioService() {
   let audioElement = null
   let dataChannel = null
   let currentSession = null
+  let sessionStartTime = null
+  let messageCount = 0
   
   // Fetch ephemeral token from backend
   const getRealtimeSession = async () => {
@@ -148,6 +150,34 @@ export function useAudioService() {
     }
   }
   
+  // Store conversation message
+  const storeMessage = async (messageType, content, audioDurationMs = null) => {
+    if (!currentSession?.session_id) return
+    
+    try {
+      const timestamp = sessionStartTime ? Date.now() - sessionStartTime : 0
+      
+      await fetch(`${BACKEND_URL}/api/realtime/session/${currentSession.session_id}/message`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message_type: messageType,
+          content,
+          audio_duration_ms: audioDurationMs,
+          timestamp_ms: timestamp,
+          metadata: {}
+        })
+      })
+      
+      messageCount++
+    } catch (error) {
+      console.error('Error storing message:', error)
+      // Don't fail the conversation if we can't store messages
+    }
+  }
+
   // Handle realtime events from data channel
   const handleRealtimeEvent = (event) => {
     console.log('Realtime event:', event)
@@ -156,6 +186,8 @@ export function useAudioService() {
       case 'conversation.item.input_audio_transcription.completed':
         if (event.transcript) {
           transcription.value = event.transcript
+          // Store user transcription
+          storeMessage('user_text', event.transcript)
         }
         break
         
@@ -168,12 +200,18 @@ export function useAudioService() {
       case 'response.done':
         isProcessing.value = false
         console.log('Response completed')
+        // Store complete assistant response
+        if (assistantResponse.value) {
+          storeMessage('assistant_text', assistantResponse.value)
+        }
         break
         
       case 'error':
         console.error('OpenAI error:', event.error)
         isProcessing.value = false
         isListening.value = false
+        // Store error message
+        storeMessage('system', `Error: ${event.error?.message || 'Unknown error'}`)
         break
         
       default:
@@ -217,6 +255,30 @@ export function useAudioService() {
     }
   }
   
+  // Update session status
+  const updateSessionStatus = async (status, errorMessage = null) => {
+    if (!currentSession?.session_id) return
+    
+    try {
+      const duration = sessionStartTime ? Math.floor((Date.now() - sessionStartTime) / 1000) : null
+      
+      await fetch(`${BACKEND_URL}/api/realtime/session/${currentSession.session_id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          status,
+          error_message: errorMessage,
+          duration_seconds: duration,
+          total_messages: messageCount
+        })
+      })
+    } catch (error) {
+      console.error('Error updating session status:', error)
+    }
+  }
+
   // Start realtime conversation
   const startRealtime = async () => {
     try {
@@ -234,6 +296,8 @@ export function useAudioService() {
       
       // Get ephemeral session
       currentSession = await getRealtimeSession()
+      sessionStartTime = Date.now()
+      messageCount = 0
       
       // Initialize WebRTC connection
       await initializeWebRTC(currentSession)
@@ -250,6 +314,9 @@ export function useAudioService() {
       isProcessing.value = false
       isListening.value = false
       
+      // Update session status as failed
+      await updateSessionStatus('failed', error.message)
+      
       // Show user-friendly error message
       if (error.message.includes('session')) {
         alert('Failed to connect to AI service. Please check your API key configuration.')
@@ -264,10 +331,13 @@ export function useAudioService() {
   }
   
   // Stop realtime conversation
-  const stopRealtime = () => {
+  const stopRealtime = async () => {
     console.log('Stopping realtime conversation...')
     isListening.value = false
     isProcessing.value = true
+    
+    // Update session as completed
+    await updateSessionStatus('completed')
     
     // Small delay to show processing state
     setTimeout(() => {
@@ -301,6 +371,8 @@ export function useAudioService() {
     }
     
     currentSession = null
+    sessionStartTime = null
+    messageCount = 0
     isConnected.value = false
     isListening.value = false
   }

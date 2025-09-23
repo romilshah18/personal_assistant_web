@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import MicScreen from '../views/MicScreen.vue'
+import HistoryScreen from '../views/HistoryScreen.vue'
 import SettingsScreen from '../views/SettingsScreen.vue'
 import AuthScreen from '../views/AuthScreen.vue'
 import { useAuth } from '../composables/useAuth'
@@ -16,6 +17,11 @@ const routes = [
     name: 'MicScreen',
     component: MicScreen,
     meta: { requiresAuth: true }
+  },
+  {
+    path: '/history',
+    name: 'HistoryScreen',
+    component: HistoryScreen
   },
   {
     path: '/settings',
