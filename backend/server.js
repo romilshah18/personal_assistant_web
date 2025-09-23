@@ -22,15 +22,34 @@ const limiter = rateLimit({
 // Middleware
 app.use(limiter);
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? [process.env.FRONTEND_URL || 'https://your-frontend-domain.com'] 
-    : [
-        'http://localhost:8080', 
-        'https://localhost:8080',
-        'http://192.168.1.13:8080', 
-        'https://192.168.1.13:8080',
-        'http://localhost:3000'
-      ],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    const allowedOrigins = process.env.NODE_ENV === 'production' 
+      ? [
+          process.env.FRONTEND_URL || 'https://your-frontend-domain.com',
+          'https://personal-assistant-web.vercel.app'
+        ]
+      : [
+          'http://localhost:8080', 
+          'https://localhost:8080',
+          'http://192.168.1.13:8080', 
+          'https://192.168.1.13:8080',
+          'http://localhost:3000'
+        ];
+
+    // Check if origin is in allowed list or matches Vercel pattern
+    const isAllowed = allowedOrigins.includes(origin) || 
+                     (process.env.NODE_ENV === 'production' && /https:\/\/.*\.vercel\.app$/.test(origin));
+    
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
   credentials: true
 }));
 app.use(express.json());
