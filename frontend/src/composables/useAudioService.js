@@ -1,7 +1,7 @@
 import { ref, reactive } from 'vue'
 
 const BACKEND_URL = process.env.NODE_ENV === 'production' 
-  ? ("https://personalassistantweb-production.up.railway.app" || 'https://your-backend-domain.com')
+  ? (process.env.VUE_APP_API_BASE || "https://personalassistantweb-production.up.railway.app")
   : window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
     ? 'http://localhost:3001'
     : `http://${window.location.hostname}:3001`

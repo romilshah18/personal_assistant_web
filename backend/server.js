@@ -54,13 +54,13 @@ const TOOL_DEFINITIONS = {
     email_actions: {
       type: "function",
       name: "email_actions",
-      description: "Manage emails (search, get content, draft, send). Use this for all email-related operations.",
+      description: "Comprehensive email management (search, get content, create/update/delete/send drafts, send emails). Use this for all email-related operations including full draft management.",
       parameters: {
         type: "object",
         properties: {
           action: { 
             type: "string", 
-            enum: ["search", "get", "draft", "send", "summary"],
+            enum: ["search", "get", "draft", "send", "summary", "list_drafts", "update_draft", "delete_draft", "send_draft"],
             description: "The email action to perform"
           },
           args: { 
@@ -217,14 +217,22 @@ app.use(cors({
     const allowedOrigins = process.env.NODE_ENV === 'production' 
       ? [
           process.env.FRONTEND_URL || 'https://your-frontend-domain.com',
-          'https://personal-assistant-web.vercel.app'
+          'https://personal-assistant-web.vercel.app',
+          // Add common production frontend URLs
+          'https://personalassistant-frontend.vercel.app',
+          'https://personal-assistant-frontend.vercel.app',
+          // Add any additional production domains
+          ...(process.env.ADDITIONAL_ORIGINS ? process.env.ADDITIONAL_ORIGINS.split(',') : [])
         ]
       : [
           'http://localhost:8080', 
           'https://localhost:8080',
           'http://192.168.1.13:8080', 
           'https://192.168.1.13:8080',
-          'http://localhost:3000'
+          'http://localhost:3000',
+          // Add mobile-friendly origins
+          'http://127.0.0.1:8080',
+          'https://127.0.0.1:8080'
         ];
 
     // Check if origin is in allowed list or matches Vercel pattern
@@ -234,7 +242,25 @@ app.use(cors({
     if (isAllowed) {
       callback(null, true);
     } else {
-      console.log('CORS blocked origin:', origin);
+      console.error('🚫 CORS BLOCKED:', {
+        origin,
+        userAgent: req?.headers?.['user-agent'],
+        allowedOrigins,
+        environment: process.env.NODE_ENV,
+        frontendUrl: process.env.FRONTEND_URL,
+        vercelPattern: /https:\/\/.*\.vercel\.app$/.test(origin || ''),
+        timestamp: new Date().toISOString()
+      });
+      
+      // For development, be more permissive with localhost and local IPs
+      if (process.env.NODE_ENV !== 'production' && origin) {
+        const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)/.test(origin);
+        if (isLocalhost) {
+          console.log('✅ Allowing localhost/local IP for development:', origin);
+          return callback(null, true);
+        }
+      }
+      
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -1053,6 +1079,85 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
         });
         break;
         
+      case 'list_drafts':
+        // List all drafts
+        const draftsResponse = await gmail.users.drafts.list({
+          userId: 'me',
+          maxResults: args?.maxResults || 10
+        });
+        
+        res.json({
+          success: true,
+          action: 'list_drafts',
+          drafts: draftsResponse.data.drafts || []
+        });
+        break;
+        
+      case 'update_draft':
+        // Update an existing draft
+        if (!args?.draftId) {
+          return res.status(400).json({ error: 'Draft ID required for update_draft action' });
+        }
+        
+        const updateDraftData = {
+          message: {
+            raw: Buffer.from(
+              `To: ${args?.to || ''}\r\n` +
+              `Subject: ${args?.subject || ''}\r\n\r\n` +
+              `${args?.body || ''}`
+            ).toString('base64')
+          }
+        };
+        
+        const updatedDraft = await gmail.users.drafts.update({
+          userId: 'me',
+          id: args.draftId,
+          resource: updateDraftData
+        });
+        
+        res.json({
+          success: true,
+          action: 'update_draft',
+          draft: updatedDraft.data
+        });
+        break;
+        
+      case 'delete_draft':
+        // Delete a draft
+        if (!args?.draftId) {
+          return res.status(400).json({ error: 'Draft ID required for delete_draft action' });
+        }
+        
+        await gmail.users.drafts.delete({
+          userId: 'me',
+          id: args.draftId
+        });
+        
+        res.json({
+          success: true,
+          action: 'delete_draft',
+          message: `Draft ${args.draftId} deleted successfully`
+        });
+        break;
+        
+      case 'send_draft':
+        // Send an existing draft
+        if (!args?.draftId) {
+          return res.status(400).json({ error: 'Draft ID required for send_draft action' });
+        }
+        
+        const sentDraft = await gmail.users.drafts.send({
+          userId: 'me',
+          resource: { id: args.draftId }
+        });
+        
+        res.json({
+          success: true,
+          action: 'send_draft',
+          message: sentDraft.data
+        });
+        break;
+        
       default:
         return res.status(400).json({ error: 'Unknown email action' });
     }
@@ -1358,7 +1463,8 @@ app.get('/api/google/auth', authenticateUser, (req, res) => {
   const scopes = [
     'https://www.googleapis.com/auth/userinfo.profile',
     'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.compose',
     'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/calendar.events'
@@ -1440,7 +1546,8 @@ app.get('/auth/google/callback', async (req, res) => {
           scopes: [
             'https://www.googleapis.com/auth/userinfo.profile',
             'https://www.googleapis.com/auth/userinfo.email',
-            'https://www.googleapis.com/auth/gmail.readonly',
+            'https://www.googleapis.com/auth/gmail.modify',
+            'https://www.googleapis.com/auth/gmail.compose',
             'https://www.googleapis.com/auth/gmail.send',
             'https://www.googleapis.com/auth/calendar.readonly',
             'https://www.googleapis.com/auth/calendar.events'

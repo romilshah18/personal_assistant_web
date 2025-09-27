@@ -1,7 +1,7 @@
 import { ref, computed } from 'vue'
 
 const API_BASE = process.env.NODE_ENV === 'production' 
-  ? 'https://personalassistantweb-production.up.railway.app' 
+  ? (process.env.VUE_APP_API_BASE || 'https://personalassistantweb-production.up.railway.app')
   : 'http://localhost:3001'
 
 // Global auth state
@@ -79,6 +79,7 @@ const signIn = async (email, password) => {
   error.value = ''
   
   try {
+    console.log('Attempting sign in to:', `${API_BASE}/api/auth/signin`)
     const response = await fetch(`${API_BASE}/api/auth/signin`, {
       method: 'POST',
       headers: {
@@ -100,7 +101,17 @@ const signIn = async (email, password) => {
     
     return { success: true, user: data.user }
   } catch (err) {
-    error.value = err.message
+    console.error('Sign in error details:', err)
+    
+    // Handle different types of errors
+    if (err.message.includes('Failed to fetch')) {
+      error.value = 'Network error. Please check your internet connection and try again.'
+    } else if (err.message.includes('CORS')) {
+      error.value = 'Connection blocked. Please try refreshing the page.'
+    } else {
+      error.value = err.message
+    }
+    
     throw err
   } finally {
     isLoading.value = false

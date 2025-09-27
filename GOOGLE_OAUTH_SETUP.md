@@ -34,7 +34,8 @@ This guide will help you set up Google OAuth integration for the Personal Assist
    - Add scopes:
      - `https://www.googleapis.com/auth/userinfo.email`
      - `https://www.googleapis.com/auth/userinfo.profile`
-     - `https://www.googleapis.com/auth/gmail.readonly`
+     - `https://www.googleapis.com/auth/gmail.modify`
+     - `https://www.googleapis.com/auth/gmail.compose`
      - `https://www.googleapis.com/auth/gmail.send`
      - `https://www.googleapis.com/auth/calendar.readonly`
      - `https://www.googleapis.com/auth/calendar.events`
@@ -127,9 +128,12 @@ When deploying to production:
 Once connected, each Google account provides access to:
 
 ### Gmail API
-- Read email messages and threads
-- Send emails on behalf of the user
+- **Full read and write access** to emails and drafts
+- **Create, modify, and delete** email drafts
+- **Send emails** on behalf of the user
+- **Read, modify, and organize** email messages and threads
 - Access to email metadata and content
+- **Manage labels and filters**
 
 ### Calendar API
 - Read calendar events
@@ -138,8 +142,33 @@ Once connected, each Google account provides access to:
 - Manage calendar sharing and permissions
 
 These capabilities can be used by your Personal Assistant to:
-- Read and summarize emails
-- Schedule meetings and appointments
-- Send emails on your behalf
-- Manage your calendar
-- Provide intelligent notifications and reminders
+- **Read and summarize emails**
+- **Create, edit, and manage email drafts**
+- **Send emails on your behalf**
+- **Organize and manage your inbox** (labels, filters, etc.)
+- **Schedule meetings and appointments**
+- **Manage your calendar**
+- **Provide intelligent notifications and reminders**
+
+## Important Notes About Scopes
+
+The application now requests the following Gmail scopes for comprehensive email management:
+
+- **`gmail.modify`**: Provides full read/write access to emails, drafts, and labels
+- **`gmail.compose`**: Allows creating and editing email drafts
+- **`gmail.send`**: Enables sending emails on your behalf
+
+These scopes replace the previous `gmail.readonly` scope to provide complete email management capabilities including:
+
+### Enhanced Draft Management
+- **Create drafts**: Create new email drafts
+- **List drafts**: View all saved drafts
+- **Update drafts**: Modify existing draft content
+- **Delete drafts**: Remove unwanted drafts
+- **Send drafts**: Send saved drafts directly
+
+### Full Email Operations
+- **Read emails**: Access all email content and metadata
+- **Send emails**: Compose and send new emails
+- **Organize emails**: Manage labels, filters, and folders
+- **Search emails**: Advanced email search capabilities
