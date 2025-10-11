@@ -66,8 +66,8 @@ export default {
 <style scoped>
 .todo-screen {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   padding-bottom: 80px; /* Space for tab navigation */
@@ -80,7 +80,8 @@ export default {
   padding: 8px 20px;
   font-size: 14px;
   font-weight: 600;
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
 }
 
 .status-icons {
@@ -105,7 +106,8 @@ export default {
   font-size: 28px;
   font-weight: 700;
   margin: 0;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 2px 4px var(--shadow-light);
+  color: var(--text-primary);
 }
 
 .main-content {
@@ -134,17 +136,19 @@ export default {
 
 .coming-soon p {
   font-size: 16px;
-  opacity: 0.8;
+  opacity: 0.7;
   margin: 0 0 20px 0;
   line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .subtitle {
   font-size: 14px;
   opacity: 0.6;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-secondary);
   padding: 8px 16px;
   border-radius: 20px;
   display: inline-block;
+  color: var(--text-secondary);
 }
 </style>

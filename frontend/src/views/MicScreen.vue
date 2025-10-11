@@ -264,8 +264,8 @@ export default {
 <style scoped>
 .mic-screen {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   position: relative;
@@ -280,7 +280,8 @@ export default {
   padding: 8px 20px;
   font-size: 14px;
   font-weight: 600;
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
 }
 
 .status-icons {
@@ -321,13 +322,15 @@ export default {
   font-size: 28px;
   font-weight: 700;
   margin-bottom: 8px;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 2px 4px var(--shadow-light);
+  color: var(--text-primary);
 }
 
 .subtitle {
   font-size: 16px;
-  opacity: 0.8;
+  opacity: 0.6;
   font-weight: 400;
+  color: var(--text-secondary);
 }
 
 .settings-button {
@@ -335,9 +338,9 @@ export default {
   height: 40px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--surface-secondary);
   backdrop-filter: blur(10px);
-  color: white;
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -347,7 +350,7 @@ export default {
 }
 
 .settings-button:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--surface-hover);
   transform: scale(1.05);
 }
 
@@ -404,30 +407,32 @@ export default {
   height: 120px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--surface-secondary);
   backdrop-filter: blur(10px);
-  color: white;
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.3s ease;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 32px var(--shadow-light);
 }
 
 .mic-button:hover {
   transform: scale(1.05);
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--surface-hover);
 }
 
 .mic-button.active {
-  background: rgba(255, 107, 107, 0.8);
+  background: var(--accent-error);
   animation: pulse 2s infinite;
+  color: var(--text-light);
 }
 
 .mic-button.processing {
-  background: rgba(255, 193, 7, 0.8);
+  background: var(--accent-warning);
   animation: spin 1s linear infinite;
+  color: var(--text-light);
 }
 
 .mic-button.disabled {
@@ -527,18 +532,20 @@ export default {
 }
 
 .transcription-content, .response-content {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.05);
   backdrop-filter: blur(10px);
   padding: 20px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  color: #333;
 }
 
 .transcription-content h3, .response-content h3 {
   font-size: 14px;
   font-weight: 600;
   margin-bottom: 8px;
-  opacity: 0.8;
+  opacity: 0.7;
+  color: #666;
 }
 
 .transcription-content p, .response-content p {
@@ -559,11 +566,11 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 12px 24px;
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.1);
   backdrop-filter: blur(10px);
   border: none;
   border-radius: 25px;
-  color: white;
+  color: #666;
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -571,7 +578,7 @@ export default {
 }
 
 .action-button:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.15);
   transform: translateY(-2px);
 }
 

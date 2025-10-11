@@ -90,9 +90,9 @@ export default {
   bottom: 0;
   left: 0;
   right: 0;
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--surface-primary);
   backdrop-filter: blur(20px);
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  border-top: 1px solid var(--border-light);
   z-index: 100;
 }
 
@@ -115,18 +115,18 @@ export default {
   padding: 8px 12px;
   cursor: pointer;
   transition: all 0.3s ease;
-  color: #666;
+  color: var(--text-secondary);
   min-width: 60px;
   border-radius: 12px;
 }
 
 .tab-button:hover {
-  background: rgba(0, 0, 0, 0.05);
+  background: var(--surface-secondary);
   transform: translateY(-1px);
 }
 
 .tab-button.active {
-  color: #667eea;
+  color: var(--accent-primary);
   background: rgba(102, 126, 234, 0.1);
 }
 

@@ -286,8 +286,8 @@ export default {
 <style scoped>
 .auth-screen {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
 }
@@ -299,7 +299,8 @@ export default {
   padding: 8px 20px;
   font-size: 14px;
   font-weight: 600;
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
 }
 
 .status-icons {
@@ -311,12 +312,12 @@ export default {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #ff4757;
+  background: var(--accent-error);
   transition: background 0.3s ease;
 }
 
 .connection-status.connected {
-  background: #2ed573;
+  background: var(--accent-success);
 }
 
 .header {
@@ -328,13 +329,15 @@ export default {
   font-size: 28px;
   font-weight: 700;
   margin-bottom: 8px;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 2px 4px var(--shadow-light);
+  color: var(--text-primary);
 }
 
 .subtitle {
   font-size: 16px;
   opacity: 0.8;
   font-weight: 400;
+  color: var(--text-secondary);
 }
 
 .auth-container {
@@ -346,20 +349,20 @@ export default {
 }
 
 .auth-card {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-primary);
   backdrop-filter: blur(10px);
   border-radius: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-light);
   padding: 30px;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 20px 60px var(--shadow-medium);
 }
 
 .auth-tabs {
   display: flex;
   margin-bottom: 30px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-secondary);
   border-radius: 12px;
   padding: 4px;
 }
@@ -369,7 +372,7 @@ export default {
   padding: 12px;
   border: none;
   background: transparent;
-  color: white;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
   border-radius: 8px;
@@ -378,7 +381,7 @@ export default {
 }
 
 .tab-button.active {
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--surface-hover);
   backdrop-filter: blur(10px);
 }
 
@@ -398,27 +401,28 @@ export default {
   font-size: 14px;
   font-weight: 500;
   opacity: 0.9;
+  color: var(--text-primary);
 }
 
 .form-group input {
   padding: 14px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-light);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-secondary);
   backdrop-filter: blur(10px);
-  color: white;
+  color: var(--text-primary);
   font-size: 16px;
   transition: all 0.3s ease;
 }
 
 .form-group input::placeholder {
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--text-muted);
 }
 
 .form-group input:focus {
   outline: none;
-  border-color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.15);
+  border-color: var(--accent-primary);
+  background: var(--surface-hover);
 }
 
 .form-group input:disabled {
@@ -437,7 +441,7 @@ export default {
   transform: translateY(-50%);
   background: none;
   border: none;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--text-muted);
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
@@ -445,8 +449,8 @@ export default {
 }
 
 .password-toggle:hover {
-  color: white;
-  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  background: var(--surface-secondary);
 }
 
 .password-toggle svg {
@@ -458,12 +462,13 @@ export default {
   font-size: 12px;
   opacity: 0.7;
   margin-top: 4px;
+  color: var(--text-secondary);
 }
 
 .error-message {
   background: rgba(255, 107, 107, 0.2);
   border: 1px solid rgba(255, 107, 107, 0.3);
-  color: #ff6b6b;
+  color: var(--accent-error);
   padding: 12px;
   border-radius: 8px;
   font-size: 14px;
@@ -472,7 +477,7 @@ export default {
 .success-message {
   background: rgba(46, 213, 115, 0.2);
   border: 1px solid rgba(46, 213, 115, 0.3);
-  color: #2ed573;
+  color: var(--accent-success);
   padding: 12px;
   border-radius: 8px;
   font-size: 14px;
@@ -482,9 +487,9 @@ export default {
   padding: 16px;
   border: none;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--accent-primary);
   backdrop-filter: blur(10px);
-  color: white;
+  color: var(--text-light);
   font-size: 16px;
   font-weight: 600;
   cursor: pointer;
@@ -493,7 +498,7 @@ export default {
 }
 
 .submit-button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(102, 126, 234, 0.9);
   transform: translateY(-1px);
 }
 
@@ -514,7 +519,7 @@ export default {
   width: 16px;
   height: 16px;
   border: 2px solid rgba(255, 255, 255, 0.3);
-  border-top: 2px solid white;
+  border-top: 2px solid var(--text-light);
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
@@ -528,19 +533,20 @@ export default {
   text-align: center;
   margin-top: 20px;
   padding-top: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid var(--border-light);
 }
 
 .auth-footer p {
   font-size: 14px;
   opacity: 0.8;
   margin: 0;
+  color: var(--text-secondary);
 }
 
 .link-button {
   background: none;
   border: none;
-  color: white;
+  color: var(--accent-primary);
   font-weight: 600;
   cursor: pointer;
   text-decoration: underline;
@@ -562,6 +568,7 @@ export default {
   font-weight: 600;
   margin-bottom: 16px;
   opacity: 0.9;
+  color: var(--text-primary);
 }
 
 .features-list {
@@ -577,10 +584,10 @@ export default {
   align-items: center;
   gap: 10px;
   padding: 12px 16px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-secondary);
   backdrop-filter: blur(10px);
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-light);
 }
 
 .feature-icon {
@@ -590,6 +597,7 @@ export default {
 .feature-item span {
   font-size: 14px;
   font-weight: 500;
+  color: var(--text-primary);
 }
 
 /* Mobile Responsiveness */

@@ -500,8 +500,8 @@ export default {
 <style scoped>
 .settings-screen {
   min-height: 100vh;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
+  background: var(--bg-primary);
+  color: var(--text-primary);
   display: flex;
   flex-direction: column;
   padding-bottom: 80px; /* Space for tab navigation */
@@ -514,7 +514,8 @@ export default {
   padding: 8px 20px;
   font-size: 14px;
   font-weight: 600;
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
 }
 
 .status-icons {
@@ -548,6 +549,7 @@ export default {
   margin: 0;
   flex: 1;
   text-align: center;
+  color: var(--text-primary);
 }
 
 .logout-button {
@@ -555,9 +557,9 @@ export default {
   height: 40px;
   border-radius: 50%;
   border: none;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--surface-secondary);
   backdrop-filter: blur(10px);
-  color: white;
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -566,8 +568,9 @@ export default {
 }
 
 .logout-button:hover {
-  background: rgba(255, 107, 107, 0.3);
+  background: rgba(255, 107, 107, 0.2);
   transform: scale(1.05);
+  color: var(--accent-error);
 }
 
 .logout-button svg {
@@ -582,10 +585,10 @@ export default {
 }
 
 .settings-section {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-primary);
   backdrop-filter: blur(10px);
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--border-light);
   margin-bottom: 20px;
   overflow: hidden;
 }
@@ -595,14 +598,14 @@ export default {
   align-items: center;
   gap: 16px;
   padding: 24px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--surface-secondary);
 }
 
 .section-icon {
   width: 48px;
   height: 48px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--surface-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -681,11 +684,11 @@ export default {
   align-items: center;
   gap: 8px;
   padding: 10px 16px;
-  background: rgba(255, 255, 255, 0.2);
+  background: var(--surface-secondary);
   backdrop-filter: blur(10px);
   border: none;
   border-radius: 8px;
-  color: white;
+  color: var(--text-primary);
   font-size: 14px;
   font-weight: 500;
   cursor: pointer;
@@ -693,7 +696,7 @@ export default {
 }
 
 .add-account-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--surface-hover);
   transform: translateY(-1px);
 }
 
@@ -718,9 +721,9 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-secondary);
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-light);
 }
 
 .account-info {
@@ -769,21 +772,21 @@ export default {
 }
 
 .test-btn {
-  background: rgba(46, 213, 115, 0.8);
-  color: white;
+  background: var(--accent-success);
+  color: var(--text-light);
 }
 
 .test-btn:hover:not(:disabled) {
-  background: rgba(46, 213, 115, 1);
+  background: rgba(46, 213, 115, 0.9);
 }
 
 .disconnect-btn {
-  background: rgba(255, 107, 107, 0.8);
-  color: white;
+  background: var(--accent-error);
+  color: var(--text-light);
 }
 
 .disconnect-btn:hover:not(:disabled) {
-  background: rgba(255, 107, 107, 1);
+  background: rgba(255, 107, 107, 0.9);
 }
 
 .test-btn:disabled, .disconnect-btn:disabled {
@@ -801,9 +804,9 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 16px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--surface-secondary);
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-light);
   margin-bottom: 12px;
 }
 
@@ -832,15 +835,15 @@ export default {
 }
 
 .permission-status.granted {
-  color: #2ed573;
+  color: var(--accent-success);
 }
 
 .permission-status.denied {
-  color: #ff6b6b;
+  color: var(--accent-error);
 }
 
 .permission-status.pending {
-  color: #ffa726;
+  color: var(--accent-warning);
 }
 
 .reset-permission-btn {
@@ -850,13 +853,13 @@ export default {
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.2);
-  color: white;
+  background: var(--surface-secondary);
+  color: var(--text-secondary);
   transition: all 0.3s ease;
 }
 
 .reset-permission-btn:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--surface-hover);
 }
 
 .no-accounts {
