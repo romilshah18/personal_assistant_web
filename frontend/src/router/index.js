@@ -3,6 +3,9 @@ import MicScreen from '../views/MicScreen.vue'
 import HistoryScreen from '../views/HistoryScreen.vue'
 import SettingsScreen from '../views/SettingsScreen.vue'
 import AuthScreen from '../views/AuthScreen.vue'
+import TodoScreen from '../views/TodoScreen.vue'
+import LearningScreen from '../views/LearningScreen.vue'
+import ActionsScreen from '../views/ActionsScreen.vue'
 import { useAuth } from '../composables/useAuth'
 
 const routes = [
@@ -16,6 +19,24 @@ const routes = [
     path: '/',
     name: 'MicScreen',
     component: MicScreen,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/todo',
+    name: 'TodoScreen',
+    component: TodoScreen,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/learning',
+    name: 'LearningScreen',
+    component: LearningScreen,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: '/actions',
+    name: 'ActionsScreen',
+    component: ActionsScreen,
     meta: { requiresAuth: true }
   },
   {

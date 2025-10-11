@@ -10,11 +10,6 @@
 
     <!-- Header -->
     <div class="header">
-      <button class="back-button" @click="goBack">
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
-        </svg>
-      </button>
       <h1 class="page-title">Settings</h1>
       <button class="logout-button" @click="handleLogout" title="Sign Out">
         <svg viewBox="0 0 24 24" fill="currentColor">
@@ -274,10 +269,10 @@ export default {
       })
     }
 
-    // Go back to main screen
-    const goBack = () => {
-      router.push('/')
-    }
+    // Go back to main screen - no longer needed with tab navigation
+    // const goBack = () => {
+    //   router.push('/')
+    // }
 
     // Show toast message
     const showToast = (message, type = 'success') => {
@@ -489,7 +484,6 @@ export default {
       toast,
       hasPermission,
       permissionDenied,
-      goBack,
       formatDate,
       handleImageError,
       connectGoogleAccount,
@@ -510,6 +504,7 @@ export default {
   color: white;
   display: flex;
   flex-direction: column;
+  padding-bottom: 80px; /* Space for tab navigation */
 }
 
 .status-bar {
@@ -545,31 +540,6 @@ export default {
   justify-content: space-between;
   padding: 20px;
   gap: 16px;
-}
-
-.back-button {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(10px);
-  color: white;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.3s ease;
-}
-
-.back-button:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: scale(1.05);
-}
-
-.back-button svg {
-  width: 20px;
-  height: 20px;
 }
 
 .page-title {

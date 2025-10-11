@@ -1,12 +1,32 @@
 <template>
   <div id="app">
     <router-view />
+    <TabNavigation v-if="showTabNavigation" />
   </div>
 </template>
 
 <script>
+import { computed } from 'vue'
+import { useRoute } from 'vue-router'
+import TabNavigation from './components/TabNavigation.vue'
+
 export default {
-  name: 'App'
+  name: 'App',
+  components: {
+    TabNavigation
+  },
+  setup() {
+    const route = useRoute()
+    
+    // Show tab navigation on all screens except auth
+    const showTabNavigation = computed(() => {
+      return route.name !== 'AuthScreen'
+    })
+    
+    return {
+      showTabNavigation
+    }
+  }
 }
 </script>
 
