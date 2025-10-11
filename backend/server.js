@@ -100,18 +100,36 @@ const TOOL_DEFINITIONS = {
     todo_actions: {
       type: "function",
       name: "todo_actions",
-      description: "Manage todo items and tasks. Use this for task management operations.",
+      description: `Manage todo items and tasks. Use this when:
+- User mentions they need to do something (e.g., "I need to buy milk tomorrow")
+- User asks what they need to do today/this week (e.g., "What's on my todo list?")
+- User says they completed a task (e.g., "I finished the report")
+- User wants to see their tasks or priorities
+- Conversation mentions action items that need to be tracked
+- User explicitly asks to add something to their todo list
+
+IMPORTANT: Automatically create todos when user mentions future tasks or things they need to do.
+Auto-categorize based on context: Work, Personal, Grocery, Learning, or Others.
+For due dates: Use ISO 8601 format (e.g., "2025-10-12T14:00:00Z"). Parse natural language dates.`,
       parameters: {
         type: "object", 
         properties: {
           action: { 
             type: "string", 
-            enum: ["list", "create", "update", "delete", "complete"],
+            enum: ["list", "create", "update", "delete", "complete", "today", "upcoming", "overdue"],
             description: "The todo action to perform"
           },
           args: { 
             type: "object",
-            description: "Action-specific arguments"
+            description: `Action-specific arguments:
+- list: {status?: "todo"|"in_progress"|"done", category_name?: string, limit?: number}
+- create: {title!: string, description?: string, due_date?: ISO8601, category_name?: "Work"|"Personal"|"Grocery"|"Learning"|"Others", priority?: "low"|"medium"|"high", from_conversation?: boolean}
+- update: {todo_id!: string, title?: string, description?: string, due_date?: ISO8601, status?: "todo"|"in_progress"|"done", priority?: string}
+- complete: {todo_id?: string, title?: string} (can match by title if ID not provided)
+- delete: {todo_id!: string}
+- today: {} (returns todos due today and overdue items)
+- upcoming: {days?: number} (default 7 days)
+- overdue: {} (returns all overdue todos)`
           }
         },
         required: ["action"]
@@ -1460,7 +1478,561 @@ app.post('/api/tools/calendar_actions', authenticateUser, async (req, res) => {
   }
 });
 
-// Handle other tool actions (todo, learning, relax)
+// Helper function to get internal session ID from OpenAI session ID
+async function getSessionId(openaiSessionId) {
+  const { data } = await supabase
+    .from('realtime_sessions')
+    .select('id')
+    .eq('openai_session_id', openaiSessionId)
+    .single();
+  return data?.id;
+}
+
+// Helper function to categorize todo by keywords
+function categorizeTodoByKeywords(title, description = '') {
+  const text = `${title} ${description}`.toLowerCase();
+  
+  // Work keywords
+  if (/\b(meeting|presentation|report|project|client|deadline|work|office|email|call|review)\b/.test(text)) {
+    return 'Work';
+  }
+  
+  // Grocery keywords
+  if (/\b(buy|grocery|groceries|shopping|store|milk|bread|food|cook|meal)\b/.test(text)) {
+    return 'Grocery';
+  }
+  
+  // Learning keywords
+  if (/\b(learn|study|read|course|tutorial|practice|research|book|article)\b/.test(text)) {
+    return 'Learning';
+  }
+  
+  // Personal keywords
+  if (/\b(personal|home|family|friend|doctor|appointment|birthday|call|visit)\b/.test(text)) {
+    return 'Personal';
+  }
+  
+  return 'Others';
+}
+
+// Handle todo_actions tool call
+app.post('/api/tools/todo_actions', authenticateUser, async (req, res) => {
+  try {
+    const { action, args, openai_session_id } = req.body;
+    
+    if (!action) {
+      return res.status(400).json({ error: 'Action is required' });
+    }
+
+    const userId = req.user.id;
+    
+    switch (action) {
+      case 'list':
+        // Get todos with optional filters
+        let listQuery = supabase
+          .from('todos')
+          .select(`
+            *,
+            category:todo_categories(id, name, color, icon)
+          `)
+          .eq('user_id', userId)
+          .order('due_date', { ascending: true, nullsFirst: false });
+        
+        // Apply filters from args
+        if (args?.status) listQuery = listQuery.eq('status', args.status);
+        if (args?.category_id) listQuery = listQuery.eq('category_id', args.category_id);
+        if (args?.category_name) {
+          // Get category ID by name first
+          const { data: category } = await supabase
+            .from('todo_categories')
+            .select('id')
+            .eq('user_id', userId)
+            .ilike('name', args.category_name)
+            .single();
+          if (category) listQuery = listQuery.eq('category_id', category.id);
+        }
+        if (args?.limit) listQuery = listQuery.limit(args.limit);
+        
+        const { data: todos, error: listError } = await listQuery;
+        
+        if (listError) throw listError;
+        
+        return res.json({
+          success: true,
+          action: 'list',
+          todos: todos || [],
+          count: todos?.length || 0
+        });
+        
+      case 'create':
+        // Validate required fields
+        if (!args?.title) {
+          return res.status(400).json({ error: 'Title is required' });
+        }
+        
+        // Get category ID if category name provided
+        let categoryId = args.category_id;
+        if (args.category_name && !categoryId) {
+          const { data: category } = await supabase
+            .from('todo_categories')
+            .select('id')
+            .eq('user_id', userId)
+            .ilike('name', args.category_name)
+            .single();
+          categoryId = category?.id;
+        }
+        
+        // Auto-categorize if no category provided
+        if (!categoryId && !args.category_name) {
+          const suggestedCategory = categorizeTodoByKeywords(args.title, args.description);
+          const { data: category } = await supabase
+            .from('todo_categories')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('name', suggestedCategory)
+            .single();
+          categoryId = category?.id;
+        }
+        
+        const sessionId = openai_session_id ? await getSessionId(openai_session_id) : null;
+        
+        const { data: newTodo, error: createError } = await supabase
+          .from('todos')
+          .insert({
+            user_id: userId,
+            session_id: sessionId,
+            title: args.title,
+            description: args.description || null,
+            due_date: args.due_date || null,
+            category_id: categoryId || null,
+            status: args.status || 'todo',
+            priority: args.priority || 'medium',
+            created_from_conversation: args.from_conversation || false,
+            metadata: args.metadata || {}
+          })
+          .select(`
+            *,
+            category:todo_categories(id, name, color, icon)
+          `)
+          .single();
+        
+        if (createError) throw createError;
+        
+        return res.json({
+          success: true,
+          action: 'create',
+          todo: newTodo,
+          message: `Todo "${args.title}" created successfully`
+        });
+        
+      case 'update':
+        const todoId = args?.todo_id || args?.id;
+        if (!todoId) {
+          return res.status(400).json({ error: 'Todo ID is required for update' });
+        }
+        
+        const updateData = {};
+        if (args.title !== undefined) updateData.title = args.title;
+        if (args.description !== undefined) updateData.description = args.description;
+        if (args.due_date !== undefined) updateData.due_date = args.due_date;
+        if (args.status !== undefined) updateData.status = args.status;
+        if (args.priority !== undefined) updateData.priority = args.priority;
+        
+        // Handle category update
+        if (args.category_name) {
+          const { data: category } = await supabase
+            .from('todo_categories')
+            .select('id')
+            .eq('user_id', userId)
+            .ilike('name', args.category_name)
+            .single();
+          if (category) updateData.category_id = category.id;
+        } else if (args.category_id !== undefined) {
+          updateData.category_id = args.category_id;
+        }
+        
+        const { data: updatedTodo, error: updateError } = await supabase
+          .from('todos')
+          .update(updateData)
+          .eq('id', todoId)
+          .eq('user_id', userId)
+          .select(`
+            *,
+            category:todo_categories(id, name, color, icon)
+          `)
+          .single();
+        
+        if (updateError) throw updateError;
+        
+        if (!updatedTodo) {
+          return res.status(404).json({ error: 'Todo not found' });
+        }
+        
+        return res.json({
+          success: true,
+          action: 'update',
+          todo: updatedTodo,
+          message: 'Todo updated successfully'
+        });
+        
+      case 'complete':
+        let completeId = args?.todo_id || args?.id;
+        
+        // If no ID provided, try to find by title (fuzzy match)
+        if (!completeId && args?.title) {
+          const { data: matchingTodos } = await supabase
+            .from('todos')
+            .select('id, title')
+            .eq('user_id', userId)
+            .neq('status', 'done')
+            .ilike('title', `%${args.title}%`)
+            .limit(1);
+          
+          if (matchingTodos && matchingTodos.length > 0) {
+            completeId = matchingTodos[0].id;
+          }
+        }
+        
+        if (!completeId) {
+          return res.status(400).json({ 
+            error: 'Todo ID or title is required',
+            message: 'Please specify which todo to mark as complete'
+          });
+        }
+        
+        const { data: completedTodo, error: completeError } = await supabase
+          .from('todos')
+          .update({ status: 'done' })
+          .eq('id', completeId)
+          .eq('user_id', userId)
+          .select(`
+            *,
+            category:todo_categories(id, name, color, icon)
+          `)
+          .single();
+        
+        if (completeError) throw completeError;
+        
+        if (!completedTodo) {
+          return res.status(404).json({ error: 'Todo not found' });
+        }
+        
+        return res.json({
+          success: true,
+          action: 'complete',
+          todo: completedTodo,
+          message: `"${completedTodo.title}" marked as complete`
+        });
+        
+      case 'delete':
+        const deleteId = args?.todo_id || args?.id;
+        if (!deleteId) {
+          return res.status(400).json({ error: 'Todo ID is required for delete' });
+        }
+        
+        const { data: deletedTodo, error: deleteError } = await supabase
+          .from('todos')
+          .delete()
+          .eq('id', deleteId)
+          .eq('user_id', userId)
+          .select('title')
+          .single();
+        
+        if (deleteError) throw deleteError;
+        
+        if (!deletedTodo) {
+          return res.status(404).json({ error: 'Todo not found' });
+        }
+        
+        return res.json({
+          success: true,
+          action: 'delete',
+          message: `"${deletedTodo.title}" deleted successfully`
+        });
+        
+      case 'today': {
+        // Get todos due today or overdue
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        
+        const { data: todayTodos, error: todayError } = await supabase
+          .from('todos')
+          .select(`
+            *,
+            category:todo_categories(id, name, color, icon)
+          `)
+          .eq('user_id', userId)
+          .neq('status', 'done')
+          .lte('due_date', today.toISOString())
+          .order('due_date', { ascending: true });
+        
+        if (todayError) throw todayError;
+        
+        // Separate overdue and today
+        const nowToday = new Date();
+        nowToday.setHours(0, 0, 0, 0);
+        const overdue = todayTodos?.filter(t => t.due_date && new Date(t.due_date) < nowToday) || [];
+        const dueToday = todayTodos?.filter(t => t.due_date && new Date(t.due_date) >= nowToday) || [];
+        
+        return res.json({
+          success: true,
+          action: 'today',
+          todos: todayTodos || [],
+          overdue: overdue,
+          due_today: dueToday,
+          count: todayTodos?.length || 0,
+          message: `You have ${overdue.length} overdue and ${dueToday.length} due today`
+        });
+      }
+        
+      case 'upcoming': {
+        const days = args?.days || 7;
+        const upcomingDate = new Date();
+        upcomingDate.setDate(upcomingDate.getDate() + days);
+        
+        const { data: upcomingTodos, error: upcomingError } = await supabase
+          .from('todos')
+          .select(`
+            *,
+            category:todo_categories(id, name, color, icon)
+          `)
+          .eq('user_id', userId)
+          .neq('status', 'done')
+          .gte('due_date', new Date().toISOString())
+          .lte('due_date', upcomingDate.toISOString())
+          .order('due_date', { ascending: true });
+        
+        if (upcomingError) throw upcomingError;
+        
+        return res.json({
+          success: true,
+          action: 'upcoming',
+          todos: upcomingTodos || [],
+          count: upcomingTodos?.length || 0,
+          days: days,
+          message: `${upcomingTodos?.length || 0} todos due in the next ${days} days`
+        });
+      }
+        
+      case 'overdue': {
+        const nowOverdue = new Date();
+        
+        const { data: overdueTodos, error: overdueError } = await supabase
+          .from('todos')
+          .select(`
+            *,
+            category:todo_categories(id, name, color, icon)
+          `)
+          .eq('user_id', userId)
+          .neq('status', 'done')
+          .lt('due_date', nowOverdue.toISOString())
+          .order('due_date', { ascending: true });
+        
+        if (overdueError) throw overdueError;
+        
+        return res.json({
+          success: true,
+          action: 'overdue',
+          todos: overdueTodos || [],
+          count: overdueTodos?.length || 0,
+          message: `You have ${overdueTodos?.length || 0} overdue todos`
+        });
+      }
+        
+      default:
+        return res.status(400).json({ error: 'Unknown todo action' });
+    }
+  } catch (error) {
+    console.error('Error handling todo_actions:', error);
+    res.status(500).json({ 
+      error: 'Todo action failed',
+      message: error.message
+    });
+  }
+});
+
+// Category Management Endpoints
+
+// Get all categories for user
+app.get('/api/todos/categories', authenticateUser, async (req, res) => {
+  try {
+    const { data: categories, error } = await supabase
+      .from('todo_categories')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('is_default', { ascending: false })
+      .order('name', { ascending: true });
+    
+    if (error) throw error;
+    
+    res.json({ 
+      success: true, 
+      categories: categories || [] 
+    });
+  } catch (error) {
+    console.error('Error fetching categories:', error);
+    res.status(500).json({ error: 'Failed to fetch categories' });
+  }
+});
+
+// Create new category
+app.post('/api/todos/categories', authenticateUser, async (req, res) => {
+  try {
+    const { name, color, icon } = req.body;
+    
+    if (!name) {
+      return res.status(400).json({ error: 'Category name is required' });
+    }
+    
+    const { data: newCategory, error } = await supabase
+      .from('todo_categories')
+      .insert({
+        user_id: req.user.id,
+        name,
+        color: color || '#6366f1',
+        icon: icon || '📝',
+        is_default: false
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === '23505') { // Unique violation
+        return res.status(400).json({ error: 'Category with this name already exists' });
+      }
+      throw error;
+    }
+    
+    res.json({ 
+      success: true, 
+      category: newCategory,
+      message: `Category "${name}" created successfully`
+    });
+  } catch (error) {
+    console.error('Error creating category:', error);
+    res.status(500).json({ error: 'Failed to create category' });
+  }
+});
+
+// Update category
+app.put('/api/todos/categories/:id', authenticateUser, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, color, icon } = req.body;
+    
+    const updateData = {};
+    if (name !== undefined) updateData.name = name;
+    if (color !== undefined) updateData.color = color;
+    if (icon !== undefined) updateData.icon = icon;
+    
+    const { data: updatedCategory, error } = await supabase
+      .from('todo_categories')
+      .update(updateData)
+      .eq('id', id)
+      .eq('user_id', req.user.id)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    if (!updatedCategory) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    
+    res.json({ 
+      success: true, 
+      category: updatedCategory,
+      message: 'Category updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating category:', error);
+    res.status(500).json({ error: 'Failed to update category' });
+  }
+});
+
+// Delete category
+app.delete('/api/todos/categories/:id', authenticateUser, async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if it's a default category
+    const { data: category } = await supabase
+      .from('todo_categories')
+      .select('is_default, name')
+      .eq('id', id)
+      .eq('user_id', req.user.id)
+      .single();
+    
+    if (!category) {
+      return res.status(404).json({ error: 'Category not found' });
+    }
+    
+    if (category.is_default) {
+      return res.status(400).json({ error: 'Cannot delete default categories' });
+    }
+    
+    const { error } = await supabase
+      .from('todo_categories')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', req.user.id);
+    
+    if (error) throw error;
+    
+    res.json({ 
+      success: true,
+      message: `Category "${category.name}" deleted successfully`
+    });
+  } catch (error) {
+    console.error('Error deleting category:', error);
+    res.status(500).json({ error: 'Failed to delete category' });
+  }
+});
+
+// Get todo statistics
+app.get('/api/todos/stats', authenticateUser, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get counts by status
+    const { data: todos } = await supabase
+      .from('todos')
+      .select('status, category_id, due_date')
+      .eq('user_id', userId);
+    
+    const stats = {
+      total: todos?.length || 0,
+      todo: todos?.filter(t => t.status === 'todo').length || 0,
+      in_progress: todos?.filter(t => t.status === 'in_progress').length || 0,
+      done: todos?.filter(t => t.status === 'done').length || 0,
+      overdue: 0,
+      due_today: 0
+    };
+    
+    // Calculate overdue and due today
+    const now = new Date();
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    
+    todos?.forEach(todo => {
+      if (todo.status !== 'done' && todo.due_date) {
+        const dueDate = new Date(todo.due_date);
+        if (dueDate < now) {
+          stats.overdue++;
+        } else if (dueDate <= today) {
+          stats.due_today++;
+        }
+      }
+    });
+    
+    res.json({ success: true, stats });
+  } catch (error) {
+    console.error('Error fetching todo stats:', error);
+    res.status(500).json({ error: 'Failed to fetch statistics' });
+  }
+});
+
+// Handle other tool actions (learning, relax)
 app.post('/api/tools/:toolName', optionalAuth, async (req, res) => {
   try {
     const { toolName } = req.params;
@@ -1468,15 +2040,6 @@ app.post('/api/tools/:toolName', optionalAuth, async (req, res) => {
     
     // For now, implement basic responses for non-Google tools
     switch (toolName) {
-      case 'todo_actions':
-        res.json({
-          success: true,
-          action,
-          message: `Todo ${action} action received`,
-          data: args
-        });
-        break;
-        
       case 'learning_actions':
         res.json({
           success: true,
