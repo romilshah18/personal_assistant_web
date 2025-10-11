@@ -54,13 +54,13 @@ const TOOL_DEFINITIONS = {
     email_actions: {
       type: "function",
       name: "email_actions",
-      description: "Comprehensive email management (search, get content, create/update/delete/send drafts, send emails). Use this for all email-related operations including full draft management.",
+      description: "Comprehensive email management (search, get content, create/update/delete/send drafts, send emails, reply to emails). Use this for all email-related operations including full draft management and smart replies.",
       parameters: {
         type: "object",
         properties: {
           action: { 
             type: "string", 
-            enum: ["search", "get", "draft", "send", "summary", "list_drafts", "update_draft", "delete_draft", "send_draft"],
+            enum: ["search", "get", "draft", "send", "reply", "summary", "list_drafts", "update_draft", "delete_draft", "send_draft"],
             description: "The email action to perform"
           },
           args: { 
@@ -872,6 +872,9 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
 
     const gmail = google.gmail({ version: 'v1', auth: accountOAuth });
     
+    // Email validation regex
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    
     switch (action) {
       case 'search':
         const searchQuery = args?.query || 'in:inbox';
@@ -893,13 +896,14 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
         break;
         
       case 'get':
-        if (!args?.messageId) {
+        const messageId = args?.messageId || args?.id;
+        if (!messageId) {
           return res.status(400).json({ error: 'Message ID required for get action' });
         }
         
         const getMessage = await gmail.users.messages.get({
           userId: 'me',
-          id: args.messageId
+          id: messageId
         });
         
         res.json({
@@ -911,20 +915,41 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
         
       case 'draft':
         // Create email draft
+        if (!args?.to) {
+          return res.status(400).json({ error: 'Recipient email (to) is required for draft creation' });
+        }
+        
+        // Validate email format
+        if (!emailRegex.test(args.to)) {
+          return res.status(400).json({ error: 'Invalid recipient email format' });
+        }
+        
+        const emailContent = [
+          `To: ${args.to}`,
+          `Subject: ${args?.subject || '(No Subject)'}`,
+          `Content-Type: text/plain; charset=utf-8`,
+          ``,
+          `${args?.body || ''}`
+        ].join('\r\n');
+        
         const draftData = {
           message: {
-            raw: Buffer.from(
-              `To: ${args?.to || ''}\r\n` +
-              `Subject: ${args?.subject || ''}\r\n\r\n` +
-              `${args?.body || ''}`
-            ).toString('base64')
+            raw: Buffer.from(emailContent).toString('base64')
           }
         };
+        
+        console.log('Creating draft with data:', {
+          to: args.to,
+          subject: args?.subject || '(No Subject)',
+          bodyLength: args?.body?.length || 0
+        });
         
         const draft = await gmail.users.drafts.create({
           userId: 'me',
           resource: draftData
         });
+        
+        console.log('Draft created successfully:', draft.data.id);
         
         res.json({
           success: true,
@@ -935,12 +960,25 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
         
       case 'send':
         // Send email
+        if (!args?.to) {
+          return res.status(400).json({ error: 'Recipient email (to) is required for sending' });
+        }
+        
+        // Validate email format
+        if (!emailRegex.test(args.to)) {
+          return res.status(400).json({ error: 'Invalid recipient email format' });
+        }
+        
+        const sendEmailContent = [
+          `To: ${args.to}`,
+          `Subject: ${args?.subject || '(No Subject)'}`,
+          `Content-Type: text/plain; charset=utf-8`,
+          ``,
+          `${args?.body || ''}`
+        ].join('\r\n');
+        
         const sendData = {
-          raw: Buffer.from(
-            `To: ${args?.to || ''}\r\n` +
-            `Subject: ${args?.subject || ''}\r\n\r\n` +
-            `${args?.body || ''}`
-          ).toString('base64')
+          raw: Buffer.from(sendEmailContent).toString('base64')
         };
         
         const sent = await gmail.users.messages.send({
@@ -953,6 +991,121 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
           action: 'send',
           message: sent.data
         });
+        break;
+        
+      case 'reply':
+        // Reply to an existing email
+        const replyMessageId = args?.messageId || args?.id;
+        if (!replyMessageId) {
+          return res.status(400).json({ error: 'Message ID required for reply action' });
+        }
+        
+        if (!args?.body) {
+          return res.status(400).json({ error: 'Reply body is required' });
+        }
+        
+        // Get the original message to extract reply information
+        const originalMessage = await gmail.users.messages.get({
+          userId: 'me',
+          id: replyMessageId,
+          format: 'full'
+        });
+        
+        // Extract headers from original message
+        const headers = originalMessage.data.payload.headers;
+        const getHeader = (name) => headers.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
+        
+        const originalFrom = getHeader('From');
+        const originalTo = getHeader('To');
+        const originalCc = getHeader('Cc');
+        const originalSubject = getHeader('Subject');
+        const originalMessageId = getHeader('Message-ID');
+        
+        // Determine reply recipients
+        let replyTo = originalFrom;
+        let replyCc = '';
+        
+        // If original was sent to multiple people, include them in CC (Reply All logic)
+        if (args?.replyAll) {
+          const allRecipients = [originalTo, originalCc].filter(Boolean).join(', ');
+          replyCc = allRecipients;
+        }
+        
+        // Create reply subject (add "Re: " if not already present)
+        let replySubject = originalSubject;
+        if (!replySubject.toLowerCase().startsWith('re:')) {
+          replySubject = `Re: ${originalSubject}`;
+        }
+        
+        // Build reply email content
+        const replyHeaders = [
+          `To: ${replyTo}`,
+          replyCc ? `Cc: ${replyCc}` : null,
+          `Subject: ${replySubject}`,
+          originalMessageId ? `In-Reply-To: ${originalMessageId}` : null,
+          originalMessageId ? `References: ${originalMessageId}` : null,
+          `Content-Type: text/plain; charset=utf-8`,
+          ``
+        ].filter(Boolean).join('\r\n');
+        
+        const replyBody = args.body;
+        const replyEmailContent = replyHeaders + replyBody;
+        
+        console.log('Creating reply with data:', {
+          originalFrom,
+          replyTo,
+          replyCc,
+          replySubject,
+          replyAll: args?.replyAll || false,
+          bodyLength: replyBody?.length || 0
+        });
+        
+        // Create reply as draft or send directly based on args
+        if (args?.sendImmediately) {
+          // Send reply immediately
+          const replyData = {
+            raw: Buffer.from(replyEmailContent).toString('base64')
+          };
+          
+          const sentReply = await gmail.users.messages.send({
+            userId: 'me',
+            resource: replyData
+          });
+          
+          console.log('Reply sent successfully:', sentReply.data.id);
+          
+          res.json({
+            success: true,
+            action: 'reply',
+            type: 'sent',
+            message: sentReply.data,
+            replyTo,
+            subject: replySubject
+          });
+        } else {
+          // Create reply as draft
+          const replyDraftData = {
+            message: {
+              raw: Buffer.from(replyEmailContent).toString('base64')
+            }
+          };
+          
+          const replyDraft = await gmail.users.drafts.create({
+            userId: 'me',
+            resource: replyDraftData
+          });
+          
+          console.log('Reply draft created successfully:', replyDraft.data.id);
+          
+          res.json({
+            success: true,
+            action: 'reply',
+            type: 'draft',
+            draft: replyDraft.data,
+            replyTo,
+            subject: replySubject
+          });
+        }
         break;
         
       case 'summary':
@@ -1095,23 +1248,33 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
         
       case 'update_draft':
         // Update an existing draft
-        if (!args?.draftId) {
+        const updateDraftId = args?.draftId || args?.id;
+        if (!updateDraftId) {
           return res.status(400).json({ error: 'Draft ID required for update_draft action' });
         }
         
+        // Validate email if provided
+        if (args?.to && !emailRegex.test(args.to)) {
+          return res.status(400).json({ error: 'Invalid recipient email format' });
+        }
+        
+        const updateEmailContent = [
+          `To: ${args?.to || ''}`,
+          `Subject: ${args?.subject || '(No Subject)'}`,
+          `Content-Type: text/plain; charset=utf-8`,
+          ``,
+          `${args?.body || ''}`
+        ].join('\r\n');
+        
         const updateDraftData = {
           message: {
-            raw: Buffer.from(
-              `To: ${args?.to || ''}\r\n` +
-              `Subject: ${args?.subject || ''}\r\n\r\n` +
-              `${args?.body || ''}`
-            ).toString('base64')
+            raw: Buffer.from(updateEmailContent).toString('base64')
           }
         };
         
         const updatedDraft = await gmail.users.drafts.update({
           userId: 'me',
-          id: args.draftId,
+          id: updateDraftId,
           resource: updateDraftData
         });
         
@@ -1124,31 +1287,33 @@ app.post('/api/tools/email_actions', authenticateUser, async (req, res) => {
         
       case 'delete_draft':
         // Delete a draft
-        if (!args?.draftId) {
+        const deleteDraftId = args?.draftId || args?.id;
+        if (!deleteDraftId) {
           return res.status(400).json({ error: 'Draft ID required for delete_draft action' });
         }
         
         await gmail.users.drafts.delete({
           userId: 'me',
-          id: args.draftId
+          id: deleteDraftId
         });
         
         res.json({
           success: true,
           action: 'delete_draft',
-          message: `Draft ${args.draftId} deleted successfully`
+          message: `Draft ${deleteDraftId} deleted successfully`
         });
         break;
         
       case 'send_draft':
         // Send an existing draft
-        if (!args?.draftId) {
+        const sendDraftId = args?.draftId || args?.id;
+        if (!sendDraftId) {
           return res.status(400).json({ error: 'Draft ID required for send_draft action' });
         }
         
         const sentDraft = await gmail.users.drafts.send({
           userId: 'me',
-          resource: { id: args.draftId }
+          resource: { id: sendDraftId }
         });
         
         res.json({
@@ -1429,6 +1594,20 @@ app.get('/api/auth/profile', authenticateUser, (req, res) => {
 
 // Google OAuth Endpoints
 
+// Helper function to check if account has required scopes
+const hasRequiredScopes = (accountScopes) => {
+  const requiredScopes = [
+    'https://www.googleapis.com/auth/gmail.modify',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://mail.google.com/'
+  ];
+  
+  return requiredScopes.every(scope => 
+    accountScopes && accountScopes.includes(scope)
+  );
+};
+
 // Get all connected Google accounts for authenticated user
 app.get('/api/google/accounts', authenticateUser, async (req, res) => {
   try {
@@ -1448,7 +1627,9 @@ app.get('/api/google/accounts', authenticateUser, async (req, res) => {
       email: account.email,
       name: account.name,
       picture: account.picture,
-      connectedAt: account.created_at
+      connectedAt: account.created_at,
+      hasRequiredScopes: hasRequiredScopes(account.scopes),
+      needsReauth: !hasRequiredScopes(account.scopes)
     }));
 
     res.json({ accounts: formattedAccounts });
@@ -1466,6 +1647,8 @@ app.get('/api/google/auth', authenticateUser, (req, res) => {
     'https://www.googleapis.com/auth/gmail.modify',
     'https://www.googleapis.com/auth/gmail.compose',
     'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://mail.google.com/',
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/calendar.events'
   ];
@@ -1474,7 +1657,8 @@ app.get('/api/google/auth', authenticateUser, (req, res) => {
     access_type: 'offline',
     scope: scopes,
     prompt: 'consent', // Force consent screen to get refresh token
-    state: req.user.id // Pass user ID in state parameter
+    state: req.user.id, // Pass user ID in state parameter
+    include_granted_scopes: true // Include previously granted scopes
   });
 
   res.json({ authUrl });
@@ -1549,6 +1733,8 @@ app.get('/auth/google/callback', async (req, res) => {
             'https://www.googleapis.com/auth/gmail.modify',
             'https://www.googleapis.com/auth/gmail.compose',
             'https://www.googleapis.com/auth/gmail.send',
+            'https://www.googleapis.com/auth/gmail.readonly',
+            'https://mail.google.com/',
             'https://www.googleapis.com/auth/calendar.readonly',
             'https://www.googleapis.com/auth/calendar.events'
           ]
