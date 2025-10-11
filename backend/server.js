@@ -141,18 +141,61 @@ For due dates: Use ISO 8601 format (e.g., "2025-10-12T14:00:00Z"). Parse natural
     learning_actions: {
       type: "function",
       name: "learning_actions",
-      description: "Educational and learning tools (research, summarize, explain). Use this for learning-related operations.",
+      description: `Help users learn new topics with continuity across sessions. Track progress and resume from where they left off.
+
+CRITICAL WORKFLOW - ALWAYS FOLLOW THIS:
+1. When user says "I want to learn X" or "Teach me X":
+   a. FIRST call list_topics to get ALL existing topics
+   b. Analyze the list: Does any existing topic semantically match what user wants to learn?
+      Examples:
+      - User says "Python" → Matches "Python Programming" ✓
+      - User says "Python" → Could match BOTH "Python Basics" AND "Python for Data Science" (ask user!)
+      - User says "Spanish" → Matches "Spanish Language" ✓
+      - User says "JavaScript" → Matches "Advanced JavaScript" (even though user said just "JavaScript")
+   
+   c. IF MULTIPLE TOPICS MATCH: Ask user "I found these topics: 1) Python Basics (45% complete), 2) Python for Data Science (20% complete). Which one do you want to continue, or start a new one?"
+   
+   d. IF ONE TOPIC MATCHES: Confirm with user "I see you already have [Topic Name] in progress at X%. Let's continue from there!" Then call continue_topic
+   
+   e. IF NO MATCH: Create new topic with create_topic
+
+2. When user says "Continue learning X":
+   a. Call list_topics to get all topics
+   b. Find matching topic
+   c. Call continue_topic with that topic_id
+
+3. During learning session: Track what you're teaching
+
+4. At end of session: Call save_progress to save everything
+
+IMPORTANT: YOU must decide if topics match semantically. Don't rely on exact string matching!
+
+Actions:
+- list_topics: Get all user's learning topics (ALWAYS use this first to check for existing topics!)
+- create_topic: Start learning a new subject (only after confirming no semantic match exists)
+- continue_topic: Resume an existing topic with full context
+- get_context: Get learning history for a topic
+- save_progress: Save current session progress (concepts, summary, next steps)
+- complete_topic: Mark topic as completed
+- update_topic: Update topic details`,
       parameters: {
         type: "object",
         properties: {
           action: { 
             type: "string", 
-            enum: ["research", "summarize", "explain", "quiz"],
+            enum: ["list_topics", "create_topic", "continue_topic", "get_context", "save_progress", "complete_topic", "update_topic"],
             description: "The learning action to perform"
           },
           args: { 
             type: "object",
-            description: "Action-specific arguments"
+            description: `Action-specific arguments:
+- list_topics: {status?: "not_started"|"in_progress"|"completed"|"paused"} (returns all topics with full details)
+- create_topic: {title!: string, description?: string, category?: string, difficulty_level?: "beginner"|"intermediate"|"advanced"}
+- continue_topic: {topic_id!: string} (returns last session summary and what to teach next)
+- get_context: {topic_id!: string} (returns full learning history)
+- save_progress: {topic_id!: string, session_id?: string, concepts_covered?: string[], summary?: string, next_steps?: string, user_understanding?: "struggling"|"okay"|"confident"|"excellent", progress_percentage?: number}
+- complete_topic: {topic_id!: string}
+- update_topic: {topic_id!: string, progress_percentage?: number, current_section?: string, status?: string}`
           }
         },
         required: ["action"]
@@ -2032,23 +2075,438 @@ app.get('/api/todos/stats', authenticateUser, async (req, res) => {
   }
 });
 
-// Handle other tool actions (learning, relax)
+// Handle learning_actions tool call
+app.post('/api/tools/learning_actions', authenticateUser, async (req, res) => {
+  try {
+    const { action, args, openai_session_id } = req.body;
+    
+    if (!action) {
+      return res.status(400).json({ error: 'Action is required' });
+    }
+
+    const userId = req.user.id;
+    
+    switch (action) {
+      case 'create_topic': {
+        // Validate required fields
+        if (!args?.title) {
+          return res.status(400).json({ error: 'Topic title is required' });
+        }
+        
+        // Create new learning topic
+        const { data: newTopic, error: createError } = await supabase
+          .from('learning_topics')
+          .insert({
+            user_id: userId,
+            title: args.title,
+            description: args.description || null,
+            category: args.category || 'General',
+            difficulty_level: args.difficulty_level || 'beginner',
+            estimated_duration: args.estimated_duration || null,
+            status: 'in_progress',
+            last_accessed_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+        
+        if (createError) throw createError;
+        
+        // Create first session
+        const sessionId = openai_session_id ? await getSessionId(openai_session_id) : null;
+        const { data: firstSession, error: sessionError } = await supabase
+          .from('learning_sessions')
+          .insert({
+            topic_id: newTopic.id,
+            user_id: userId,
+            realtime_session_id: sessionId,
+            session_number: 1,
+            title: `Session 1: Introduction to ${args.title}`,
+            started_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+        
+        if (sessionError) throw sessionError;
+        
+        return res.json({
+          success: true,
+          action: 'create_topic',
+          topic: newTopic,
+          session: firstSession,
+          message: `Great! Let's start learning ${args.title}. I'll help you through this journey.`
+        });
+      }
+      
+      case 'continue_topic': {
+        const topicId = args?.topic_id;
+        if (!topicId) {
+          return res.status(400).json({ error: 'topic_id is required' });
+        }
+        
+        // Get topic details
+        const { data: topic, error: topicError } = await supabase
+          .from('learning_topics')
+          .select('*')
+          .eq('id', topicId)
+          .eq('user_id', userId)
+          .single();
+        
+        if (topicError || !topic) {
+          return res.status(404).json({ error: 'Topic not found' });
+        }
+        
+        // Get last session
+        const { data: lastSession } = await supabase
+          .from('learning_sessions')
+          .select('*')
+          .eq('topic_id', topicId)
+          .order('session_number', { ascending: false })
+          .limit(1)
+          .single();
+        
+        // Create new session
+        const sessionId = openai_session_id ? await getSessionId(openai_session_id) : null;
+        const sessionNumber = (lastSession?.session_number || 0) + 1;
+        const { data: newSession, error: sessionError } = await supabase
+          .from('learning_sessions')
+          .insert({
+            topic_id: topicId,
+            user_id: userId,
+            realtime_session_id: sessionId,
+            session_number: sessionNumber,
+            title: `Session ${sessionNumber}`,
+            started_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+        
+        if (sessionError) throw sessionError;
+        
+        // Update topic last accessed
+        await supabase
+          .from('learning_topics')
+          .update({ 
+            last_accessed_at: new Date().toISOString(),
+            status: 'in_progress'
+          })
+          .eq('id', topicId);
+        
+        return res.json({
+          success: true,
+          action: 'continue_topic',
+          topic: topic,
+          session: newSession,
+          context: {
+            last_session_summary: topic.last_session_summary,
+            next_steps: topic.next_steps,
+            key_concepts_learned: topic.key_concepts_learned,
+            current_section: topic.current_section,
+            progress_percentage: topic.progress_percentage,
+            total_sessions: topic.total_sessions,
+            last_session: lastSession
+          },
+          message: `Welcome back to ${topic.title}! Let's continue from where we left off.`
+        });
+      }
+      
+      case 'get_context': {
+        const topicId = args?.topic_id;
+        if (!topicId) {
+          return res.status(400).json({ error: 'topic_id is required' });
+        }
+        
+        // Get topic with all sessions
+        const { data: topic } = await supabase
+          .from('learning_topics')
+          .select('*')
+          .eq('id', topicId)
+          .eq('user_id', userId)
+          .single();
+        
+        if (!topic) {
+          return res.status(404).json({ error: 'Topic not found' });
+        }
+        
+        // Get all sessions
+        const { data: sessions } = await supabase
+          .from('learning_sessions')
+          .select('*')
+          .eq('topic_id', topicId)
+          .order('session_number', { ascending: true });
+        
+        // Get recent progress points
+        const { data: progressPoints } = await supabase
+          .from('learning_progress_points')
+          .select('*')
+          .eq('topic_id', topicId)
+          .order('created_at', { ascending: false })
+          .limit(50);
+        
+        return res.json({
+          success: true,
+          action: 'get_context',
+          topic: topic,
+          sessions: sessions || [],
+          progress_points: progressPoints || [],
+          context_summary: {
+            title: topic.title,
+            status: topic.status,
+            progress: topic.progress_percentage,
+            total_sessions: topic.total_sessions,
+            total_time: topic.total_duration_minutes,
+            last_session_summary: topic.last_session_summary,
+            next_steps: topic.next_steps,
+            key_concepts: topic.key_concepts_learned,
+            current_section: topic.current_section
+          }
+        });
+      }
+      
+      case 'save_progress': {
+        const topicId = args?.topic_id;
+        if (!topicId) {
+          return res.status(400).json({ error: 'topic_id is required' });
+        }
+        
+        // Update topic with progress
+        const updateData = {
+          updated_at: new Date().toISOString()
+        };
+        
+        if (args.summary) updateData.last_session_summary = args.summary;
+        if (args.next_steps) updateData.next_steps = args.next_steps;
+        if (args.current_section) updateData.current_section = args.current_section;
+        if (args.progress_percentage !== undefined) updateData.progress_percentage = args.progress_percentage;
+        
+        // Update key concepts (merge with existing)
+        if (args.concepts_covered && args.concepts_covered.length > 0) {
+          const { data: currentTopic } = await supabase
+            .from('learning_topics')
+            .select('key_concepts_learned')
+            .eq('id', topicId)
+            .single();
+          
+          const existingConcepts = currentTopic?.key_concepts_learned || [];
+          const newConcepts = args.concepts_covered.filter(c => !existingConcepts.includes(c));
+          updateData.key_concepts_learned = [...existingConcepts, ...newConcepts];
+        }
+        
+        const { data: updatedTopic, error: updateError } = await supabase
+          .from('learning_topics')
+          .update(updateData)
+          .eq('id', topicId)
+          .eq('user_id', userId)
+          .select()
+          .single();
+        
+        if (updateError) throw updateError;
+        
+        // Update current session if session_id provided or find latest
+        let sessionToUpdate = args.session_id;
+        if (!sessionToUpdate) {
+          const { data: latestSession } = await supabase
+            .from('learning_sessions')
+            .select('id')
+            .eq('topic_id', topicId)
+            .eq('user_id', userId)
+            .order('session_number', { ascending: false })
+            .limit(1)
+            .single();
+          sessionToUpdate = latestSession?.id;
+        }
+        
+        if (sessionToUpdate) {
+          const sessionUpdateData = {
+            ended_at: new Date().toISOString()
+          };
+          
+          if (args.concepts_covered) sessionUpdateData.concepts_covered = args.concepts_covered;
+          if (args.summary) sessionUpdateData.conversation_summary = args.summary;
+          if (args.user_understanding) sessionUpdateData.user_understanding_level = args.user_understanding;
+          if (args.exercises_completed) sessionUpdateData.exercises_completed = args.exercises_completed;
+          if (args.questions_asked) sessionUpdateData.questions_asked = args.questions_asked;
+          
+          // Calculate duration
+          const { data: session } = await supabase
+            .from('learning_sessions')
+            .select('started_at')
+            .eq('id', sessionToUpdate)
+            .single();
+          
+          if (session?.started_at) {
+            const duration = Math.round((new Date() - new Date(session.started_at)) / 60000);
+            sessionUpdateData.duration_minutes = duration;
+          }
+          
+          await supabase
+            .from('learning_sessions')
+            .update(sessionUpdateData)
+            .eq('id', sessionToUpdate);
+        }
+        
+        // Save progress points if provided
+        if (args.progress_points && args.progress_points.length > 0) {
+          const points = args.progress_points.map(point => ({
+            topic_id: topicId,
+            session_id: sessionToUpdate,
+            user_id: userId,
+            point_type: point.type || 'concept',
+            content: point.content,
+            timestamp_in_session: point.timestamp || 0,
+            metadata: point.metadata || {}
+          }));
+          
+          await supabase
+            .from('learning_progress_points')
+            .insert(points);
+        }
+        
+        return res.json({
+          success: true,
+          action: 'save_progress',
+          topic: updatedTopic,
+          message: 'Progress saved successfully! Great work today.'
+        });
+      }
+      
+      case 'list_topics': {
+        let query = supabase
+          .from('learning_topics')
+          .select('*')
+          .eq('user_id', userId)
+          .order('last_accessed_at', { ascending: false, nullsFirst: false });
+        
+        if (args?.status) {
+          query = query.eq('status', args.status);
+        }
+        
+        if (args?.category) {
+          query = query.eq('category', args.category);
+        }
+        
+        const { data: topics, error: listError } = await query;
+        
+        if (listError) throw listError;
+        
+        // Format topics for LLM with relevant information for matching
+        const formattedTopics = topics?.map(topic => ({
+          id: topic.id,
+          title: topic.title,
+          description: topic.description,
+          category: topic.category,
+          status: topic.status,
+          difficulty_level: topic.difficulty_level,
+          progress_percentage: topic.progress_percentage,
+          total_sessions: topic.total_sessions,
+          total_duration_minutes: topic.total_duration_minutes,
+          last_session_summary: topic.last_session_summary,
+          next_steps: topic.next_steps,
+          last_accessed_at: topic.last_accessed_at,
+          created_at: topic.created_at
+        })) || [];
+        
+        return res.json({
+          success: true,
+          action: 'list_topics',
+          topics: formattedTopics,
+          count: formattedTopics.length,
+          message: formattedTopics.length === 0 
+            ? 'No learning topics found. User can start a new one!'
+            : `Found ${formattedTopics.length} learning topic(s). Analyze these to see if any match what the user wants to learn.`
+        });
+      }
+      
+      case 'complete_topic': {
+        const topicId = args?.topic_id;
+        if (!topicId) {
+          return res.status(400).json({ error: 'topic_id is required' });
+        }
+        
+        const { data: completedTopic, error: completeError } = await supabase
+          .from('learning_topics')
+          .update({
+            status: 'completed',
+            progress_percentage: 100,
+            completed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', topicId)
+          .eq('user_id', userId)
+          .select()
+          .single();
+        
+        if (completeError) throw completeError;
+        
+        if (!completedTopic) {
+          return res.status(404).json({ error: 'Topic not found' });
+        }
+        
+        return res.json({
+          success: true,
+          action: 'complete_topic',
+          topic: completedTopic,
+          message: `Congratulations! You've completed ${completedTopic.title}! 🎉`
+        });
+      }
+      
+      case 'update_topic': {
+        const topicId = args?.topic_id;
+        if (!topicId) {
+          return res.status(400).json({ error: 'topic_id is required' });
+        }
+        
+        const updateData = { updated_at: new Date().toISOString() };
+        
+        if (args.title !== undefined) updateData.title = args.title;
+        if (args.description !== undefined) updateData.description = args.description;
+        if (args.status !== undefined) updateData.status = args.status;
+        if (args.progress_percentage !== undefined) updateData.progress_percentage = args.progress_percentage;
+        if (args.current_section !== undefined) updateData.current_section = args.current_section;
+        if (args.category !== undefined) updateData.category = args.category;
+        if (args.difficulty_level !== undefined) updateData.difficulty_level = args.difficulty_level;
+        
+        const { data: updatedTopic, error: updateError } = await supabase
+          .from('learning_topics')
+          .update(updateData)
+          .eq('id', topicId)
+          .eq('user_id', userId)
+          .select()
+          .single();
+        
+        if (updateError) throw updateError;
+        
+        if (!updatedTopic) {
+          return res.status(404).json({ error: 'Topic not found' });
+        }
+        
+        return res.json({
+          success: true,
+          action: 'update_topic',
+          topic: updatedTopic,
+          message: 'Topic updated successfully'
+        });
+      }
+      
+      default:
+        return res.status(400).json({ error: 'Unknown learning action' });
+    }
+  } catch (error) {
+    console.error('Error handling learning_actions:', error);
+    res.status(500).json({ 
+      error: 'Learning action failed',
+      message: error.message
+    });
+  }
+});
+
+// Handle other tool actions (relax, etc.)
 app.post('/api/tools/:toolName', optionalAuth, async (req, res) => {
   try {
     const { toolName } = req.params;
     const { action, args } = req.body;
     
-    // For now, implement basic responses for non-Google tools
+    // For now, implement basic responses for non-implemented tools
     switch (toolName) {
-      case 'learning_actions':
-        res.json({
-          success: true,
-          action,
-          message: `Learning ${action} action received`,
-          data: args
-        });
-        break;
-        
       case 'relax_actions':
         res.json({
           success: true,
@@ -2067,6 +2525,258 @@ app.post('/api/tools/:toolName', optionalAuth, async (req, res) => {
       error: 'Tool action failed',
       message: error.message
     });
+  }
+});
+
+// Learning REST API Endpoints
+
+// Get all learning topics for user
+app.get('/api/learning/topics', authenticateUser, async (req, res) => {
+  try {
+    const { status, category, limit, offset } = req.query;
+    
+    let query = supabase
+      .from('learning_topics')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('last_accessed_at', { ascending: false, nullsFirst: false });
+    
+    if (status) query = query.eq('status', status);
+    if (category) query = query.eq('category', category);
+    if (limit) query = query.limit(parseInt(limit));
+    if (offset) query = query.range(parseInt(offset), parseInt(offset) + parseInt(limit || 10) - 1);
+    
+    const { data: topics, error } = await query;
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      topics: topics || []
+    });
+  } catch (error) {
+    console.error('Error fetching learning topics:', error);
+    res.status(500).json({ error: 'Failed to fetch learning topics' });
+  }
+});
+
+// Create new learning topic
+app.post('/api/learning/topics', authenticateUser, async (req, res) => {
+  try {
+    const { title, description, category, difficulty_level, estimated_duration } = req.body;
+    
+    if (!title) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+    
+    const { data: newTopic, error } = await supabase
+      .from('learning_topics')
+      .insert({
+        user_id: req.user.id,
+        title,
+        description: description || null,
+        category: category || 'General',
+        difficulty_level: difficulty_level || 'beginner',
+        estimated_duration: estimated_duration || null,
+        status: 'not_started',
+        last_accessed_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      topic: newTopic,
+      message: 'Learning topic created successfully'
+    });
+  } catch (error) {
+    console.error('Error creating learning topic:', error);
+    res.status(500).json({ error: 'Failed to create learning topic' });
+  }
+});
+
+// Get specific topic with details
+app.get('/api/learning/topics/:topicId', authenticateUser, async (req, res) => {
+  try {
+    const { topicId } = req.params;
+    
+    // Get topic
+    const { data: topic, error: topicError } = await supabase
+      .from('learning_topics')
+      .select('*')
+      .eq('id', topicId)
+      .eq('user_id', req.user.id)
+      .single();
+    
+    if (topicError || !topic) {
+      return res.status(404).json({ error: 'Topic not found' });
+    }
+    
+    // Get sessions for this topic
+    const { data: sessions, error: sessionsError } = await supabase
+      .from('learning_sessions')
+      .select('*')
+      .eq('topic_id', topicId)
+      .order('session_number', { ascending: false });
+    
+    if (sessionsError) throw sessionsError;
+    
+    res.json({
+      success: true,
+      topic,
+      sessions: sessions || []
+    });
+  } catch (error) {
+    console.error('Error fetching topic details:', error);
+    res.status(500).json({ error: 'Failed to fetch topic details' });
+  }
+});
+
+// Update learning topic
+app.patch('/api/learning/topics/:topicId', authenticateUser, async (req, res) => {
+  try {
+    const { topicId } = req.params;
+    const { title, description, status, progress_percentage, current_section, category, difficulty_level } = req.body;
+    
+    const updateData = { updated_at: new Date().toISOString() };
+    
+    if (title !== undefined) updateData.title = title;
+    if (description !== undefined) updateData.description = description;
+    if (status !== undefined) updateData.status = status;
+    if (progress_percentage !== undefined) updateData.progress_percentage = progress_percentage;
+    if (current_section !== undefined) updateData.current_section = current_section;
+    if (category !== undefined) updateData.category = category;
+    if (difficulty_level !== undefined) updateData.difficulty_level = difficulty_level;
+    
+    const { data: updatedTopic, error } = await supabase
+      .from('learning_topics')
+      .update(updateData)
+      .eq('id', topicId)
+      .eq('user_id', req.user.id)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    if (!updatedTopic) {
+      return res.status(404).json({ error: 'Topic not found' });
+    }
+    
+    res.json({
+      success: true,
+      topic: updatedTopic,
+      message: 'Topic updated successfully'
+    });
+  } catch (error) {
+    console.error('Error updating topic:', error);
+    res.status(500).json({ error: 'Failed to update topic' });
+  }
+});
+
+// Delete learning topic
+app.delete('/api/learning/topics/:topicId', authenticateUser, async (req, res) => {
+  try {
+    const { topicId } = req.params;
+    
+    const { data: deletedTopic, error } = await supabase
+      .from('learning_topics')
+      .delete()
+      .eq('id', topicId)
+      .eq('user_id', req.user.id)
+      .select('title')
+      .single();
+    
+    if (error) throw error;
+    
+    if (!deletedTopic) {
+      return res.status(404).json({ error: 'Topic not found' });
+    }
+    
+    res.json({
+      success: true,
+      message: `Topic "${deletedTopic.title}" deleted successfully`
+    });
+  } catch (error) {
+    console.error('Error deleting topic:', error);
+    res.status(500).json({ error: 'Failed to delete topic' });
+  }
+});
+
+// Get learning statistics
+app.get('/api/learning/stats', authenticateUser, async (req, res) => {
+  try {
+    const { data: topics } = await supabase
+      .from('learning_topics')
+      .select('status, category, total_duration_minutes')
+      .eq('user_id', req.user.id);
+    
+    const stats = {
+      total_topics: topics?.length || 0,
+      not_started: topics?.filter(t => t.status === 'not_started').length || 0,
+      in_progress: topics?.filter(t => t.status === 'in_progress').length || 0,
+      completed: topics?.filter(t => t.status === 'completed').length || 0,
+      paused: topics?.filter(t => t.status === 'paused').length || 0,
+      total_learning_time: topics?.reduce((sum, t) => sum + (t.total_duration_minutes || 0), 0) || 0
+    };
+    
+    // Group by category
+    const byCategory = {};
+    topics?.forEach(topic => {
+      const cat = topic.category || 'General';
+      byCategory[cat] = (byCategory[cat] || 0) + 1;
+    });
+    stats.by_category = byCategory;
+    
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (error) {
+    console.error('Error fetching learning stats:', error);
+    res.status(500).json({ error: 'Failed to fetch statistics' });
+  }
+});
+
+// Get sessions for a topic
+app.get('/api/learning/topics/:topicId/sessions', authenticateUser, async (req, res) => {
+  try {
+    const { topicId } = req.params;
+    const { limit, offset } = req.query;
+    
+    // Verify topic belongs to user
+    const { data: topic } = await supabase
+      .from('learning_topics')
+      .select('id')
+      .eq('id', topicId)
+      .eq('user_id', req.user.id)
+      .single();
+    
+    if (!topic) {
+      return res.status(404).json({ error: 'Topic not found' });
+    }
+    
+    let query = supabase
+      .from('learning_sessions')
+      .select('*')
+      .eq('topic_id', topicId)
+      .order('session_number', { ascending: false });
+    
+    if (limit) query = query.limit(parseInt(limit));
+    if (offset) query = query.range(parseInt(offset), parseInt(offset) + parseInt(limit || 10) - 1);
+    
+    const { data: sessions, error } = await query;
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      sessions: sessions || []
+    });
+  } catch (error) {
+    console.error('Error fetching sessions:', error);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
   }
 });
 
