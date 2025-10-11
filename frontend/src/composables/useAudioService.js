@@ -1,4 +1,5 @@
 import { ref, reactive } from 'vue'
+import { useConversationState } from './useConversationState'
 
 const BACKEND_URL = process.env.NODE_ENV === 'production' 
   ? (process.env.VUE_APP_API_BASE || "https://personalassistantweb-production.up.railway.app")
@@ -7,6 +8,9 @@ const BACKEND_URL = process.env.NODE_ENV === 'production'
     : `http://${window.location.hostname}:3001`
 
 export function useAudioService() {
+  // Get conversation state manager
+  const { setConversationActive } = useConversationState()
+  
   // Reactive state
   const isListening = ref(false)
   const isProcessing = ref(false)
@@ -438,6 +442,9 @@ export function useAudioService() {
       transcription.value = ''
       assistantResponse.value = ''
       
+      // Set conversation as active with cleanup function
+      setConversationActive(true, stopRealtime)
+      
       console.log('Realtime conversation started')
       return true
     } catch (error) {
@@ -447,6 +454,9 @@ export function useAudioService() {
       
       // Update session status as failed
       await updateSessionStatus('failed', error.message)
+      
+      // Set conversation as inactive on error
+      setConversationActive(false, null)
       
       // Show user-friendly error message
       if (error.message.includes('session')) {
@@ -466,6 +476,9 @@ export function useAudioService() {
     console.log('Stopping realtime conversation...')
     isListening.value = false
     isProcessing.value = true
+    
+    // Set conversation as inactive
+    setConversationActive(false, null)
     
     // Update session as completed
     await updateSessionStatus('completed')
@@ -506,6 +519,9 @@ export function useAudioService() {
     messageCount = 0
     isConnected.value = false
     isListening.value = false
+    
+    // Ensure conversation state is cleared
+    setConversationActive(false, null)
   }
   
   // Toggle microphone (main function called by UI)
